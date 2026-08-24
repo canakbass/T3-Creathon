@@ -195,10 +195,21 @@ class AiAnalysisResponse(BaseModel):
 
 
 # --- Final Decision Schemas ---
+class RationaleDraft(BaseModel):
+    """AI'nin urettigi gerekce TASLAGI - nihai gerekce degil."""
+    draft: str
+    notice: str
+    suggested_score: int
+    suggested_outcome: str
+
 class FinalDecisionCreate(BaseModel):
     outcome: str # approve, reject, revise
     final_score: int
     rationale: str
+    # Denetim izi: gerekce AI taslagindan mi geldi, hakem degistirdi mi.
+    # Arayuz taslak dugmesini kullandiysa bunlari gonderir.
+    rationale_ai_drafted: bool = False
+    rationale_edited_by_referee: bool = False
 
 class FinalDecisionResponse(BaseModel):
     id: str

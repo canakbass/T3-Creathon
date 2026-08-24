@@ -436,6 +436,96 @@ def get_report_file(
     )
 
 
+@router.post("/{report_id}/rationale-draft", response_model=schemas.RationaleDraft)
+def rationale_draft(
+    report_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.RoleChecker(["REFEREE"])),
+):
+    """Hakemin gerekcesi icin AI TASLAGI uretir.
+
+    ETIK CERCEVE - bu uc noktanin tasarimi bilincli:
+
+    Gerekce, bir insanin raporu GERCEKTEN inceledi̇gi̇ni̇n kanitidir. AI'nin
+    gerekceyi hayalet yazar gibi yazmasi, projenin ana ilkesini ("AI karar
+    verici degildir") terse cevirirdi. Bu yuzden:
+
+      * Taslak OTOMATIK DOLDURULMUYOR - hakem acikca istemek zorunda.
+      * Taslak yeni bir yargi URETMIYOR; yalnizca analizin ZATEN buldugu
+        somut bulgulari duzenli bir metne donusturuyor. Yani hakemin
+        okudugu seyleri toparliyor, onun yerine karar vermiyor.
+      * Metnin basinda AI tarafindan uretildigi yaziyor.
+      * Karar kaydedilirken bu metnin taslaktan gelip gelmedigi ve hakemin
+        DEGISTIRIP degistirmedigi veri tabaninda saklaniyor
+        (FinalDecision.rationale_ai_drafted / rationale_edited_by_referee).
+        Sonradan itiraz olursa "bu gerekceyi kim yazdi" sorusunun cevabi
+        kayitli.
+    """
+    report = db.query(models.Report).filter(models.Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
+    if not _rapora_erisebilir_mi(report, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu rapor size atanmamis.",
+        )
+    if not report.ai_analysis:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bu rapor icin henuz AI analizi yok; taslak uretilemez.",
+        )
+
+    a = report.ai_analysis
+    kontroller = [
+        ("Dil ve şablon uyumu", a.language_template_score, a.language_template_summary,
+         a.language_template_findings, False),
+        ("İçerik ve başlık kontrolü", a.content_heading_score, a.content_heading_summary,
+         a.content_heading_findings, False),
+        ("Kategori uyumu", a.category_match_score, a.category_match_summary,
+         a.category_match_findings, False),
+        # Benzerlik TERS polarite: dusuk puan iyi sonuc.
+        ("Benzerlik / intihal", a.similarity_score, a.similarity_summary,
+         a.similarity_findings, True),
+    ]
+
+    guclu, zayif = [], []
+    for ad, puan, ozet, bulgular_json, ters in kontroller:
+        iyi = (puan <= 15) if ters else (puan >= 85)
+        satir = f"{ad}: {puan}/100 — {(ozet or '').strip()}"
+        (guclu if iyi else zayif).append(satir)
+
+    parcalar = [
+        "[Bu taslak AI analizinden üretilmiştir. Göndermeden önce kendi "
+        "değerlendirmenizi ekleyin ve gerekli düzeltmeleri yapın.]",
+        "",
+    ]
+    if guclu:
+        parcalar.append("Güçlü bulunan noktalar:")
+        parcalar += [f"- {s}" for s in guclu]
+        parcalar.append("")
+    if zayif:
+        parcalar.append("Gözden geçirilmesi gereken noktalar:")
+        parcalar += [f"- {s}" for s in zayif]
+        parcalar.append("")
+
+    # Kriter kirilimi zaten AI gerekcesinin icinde; hakeme oldugu gibi
+    # veriyoruz ki puanin nasil olustugunu gorebilsin.
+    if a.rationale:
+        parcalar.append("Motorun kriter değerlendirmesi:")
+        parcalar.append(a.rationale.strip())
+
+    return {
+        "draft": "\n".join(parcalar).strip(),
+        "notice": (
+            "Bu metin AI analizinden üretilmiş bir TASLAKTIR. Nihai gerekçe "
+            "sizin değerlendirmenizdir; gönderdiğiniz metnin taslaktan "
+            "değiştirilip değiştirilmediği kayıt altına alınır."
+        ),
+        "suggested_score": a.suggested_score,
+        "suggested_outcome": a.suggested_outcome,
+    }
+
+
 @router.post("/{report_id}/decision", response_model=schemas.FinalDecisionResponse)
 def submit_decision(
     report_id: str,
@@ -472,6 +562,11 @@ def submit_decision(
         outcome=decision_in.outcome,
         final_score=decision_in.final_score,
         rationale=decision_in.rationale,
+        # Denetim izi: gerekce AI taslagindan mi geldi, hakem degistirdi mi.
+        # Sonradan itiraz olursa "bu gerekceyi kim yazdi" sorusunun cevabi
+        # kayitli olsun diye saklaniyor (bkz. rationale-draft uc noktasi).
+        rationale_ai_drafted=decision_in.rationale_ai_drafted,
+        rationale_edited_by_referee=decision_in.rationale_edited_by_referee,
         submitted_at=datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     )
     
