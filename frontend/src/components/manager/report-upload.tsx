@@ -1,6 +1,17 @@
 "use client";
 
-import { useCallback, useId, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type DragEvent,
+  type KeyboardEvent,
+} from "react";
+import { listCategories, pollUntilAnalyzed, uploadReport } from "@/lib/api";
+import { describeError } from "@/lib/api/errors";
+import type { WireCategory } from "@/lib/api/types";
 
 const ACCEPTED_MIME_TYPES = [
   "application/pdf",
@@ -10,7 +21,12 @@ const ACCEPTED_MIME_TYPES = [
 const ACCEPTED_EXTENSIONS = [".pdf", ".doc", ".docx"];
 const ACCEPT_ATTRIBUTE = ACCEPTED_EXTENSIONS.join(",");
 
-type UploadStatus = "uploading" | "success" | "error";
+/**
+ * "analyzing" durumu yeni: dosya diske yazildiktan sonra analiz ARKA PLANDA
+ * calisiyor ve birkac saniye suruyor. Yukleme bitti diye basari gostermek
+ * yanlis olurdu - kullanici raporu acinca "Analiz devam ediyor" gorurdu.
+ */
+type UploadStatus = "uploading" | "analyzing" | "success" | "error";
 
 interface UploadItem {
   id: string;
@@ -18,14 +34,18 @@ interface UploadItem {
   status: UploadStatus;
   progress: number;
   errorMessage?: string;
+  /** Basarili yuklemede backend'in verdigi rapor kimligi. */
+  reportId?: string;
 }
 
 interface ReportUploadProps {
-  /** Interval between simulated progress ticks, in ms. Lower this in tests. */
+  /** @deprecated Sahte ilerleme kaldirildi; artik gercek yukleme yapiliyor. */
   progressIntervalMs?: number;
-  /** Progress gained per tick. */
+  /** @deprecated Sahte ilerleme kaldirildi. */
   progressStepPercent?: number;
   onUploadComplete?: (fileName: string) => void;
+  /** Testlerde API cagrisini atlamak icin kategori listesini dogrudan ver. */
+  initialCategories?: WireCategory[];
 }
 
 function isAcceptedFile(file: File): boolean {
@@ -41,39 +61,85 @@ function nextId(): string {
 }
 
 export function ReportUpload({
-  progressIntervalMs = 200,
-  progressStepPercent = 25,
   onUploadComplete,
+  initialCategories,
 }: ReportUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [items, setItems] = useState<UploadItem[]>([]);
+  const [categories, setCategories] = useState<WireCategory[]>(initialCategories ?? []);
+  const [categoryId, setCategoryId] = useState(initialCategories?.[0]?.id ?? "");
+  const [projectName, setProjectName] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const dropzoneLabelId = useId();
+  const projectNameId = useId();
+  const categoryFieldId = useId();
   const dragCounter = useRef(0);
 
-  const simulateUpload = useCallback(
-    (id: string, fileName: string) => {
-      const timer = setInterval(() => {
-        setItems((current) =>
-          current.map((item) => {
-            if (item.id !== id || item.status !== "uploading") return item;
-            const nextProgress = Math.min(item.progress + progressStepPercent, 100);
-            if (nextProgress >= 100) {
-              clearInterval(timer);
-              onUploadComplete?.(fileName);
-              return { ...item, progress: 100, status: "success" as const };
-            }
-            return { ...item, progress: nextProgress };
-          }),
-        );
-      }, progressIntervalMs);
+  useEffect(() => {
+    if (initialCategories) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const fetched = await listCategories();
+        if (cancelled) return;
+        setCategories(fetched);
+        setCategoryId((current) => current || fetched[0]?.id || "");
+      } catch (cause) {
+        if (!cancelled) setFormError(describeError(cause));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialCategories]);
+
+  const patchItem = useCallback((id: string, patch: Partial<UploadItem>) => {
+    setItems((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    );
+  }, []);
+
+  /**
+   * Dosyayi GERCEKTEN backend'e gonderir.
+   *
+   * Onceden bu bir `setInterval` ile ilerleme cubugunu doldurup "Yuklendi"
+   * yazan simulasyondu; dosya hicbir yere gitmiyordu.
+   *
+   * `fetch` yukleme ilerlemesi bildirmedigi icin yuzde yerine belirsiz bir
+   * cubuk gosteriyoruz - sahte bir yuzde gostermek kullaniciyi yaniltir.
+   */
+  const performUpload = useCallback(
+    async (id: string, file: File, name: string, category: string) => {
+      try {
+        const report = await uploadReport({
+          projectName: name,
+          categoryId: category,
+          file,
+        });
+
+        // Yukleme bitti ama analiz daha yeni basladi.
+        patchItem(id, { status: "analyzing", progress: 60, reportId: report.reportId });
+
+        await pollUntilAnalyzed(report.reportId);
+
+        patchItem(id, { status: "success", progress: 100 });
+        onUploadComplete?.(file.name);
+      } catch (cause) {
+        patchItem(id, {
+          status: "error",
+          progress: 0,
+          errorMessage: describeError(cause),
+        });
+      }
     },
-    [onUploadComplete, progressIntervalMs, progressStepPercent],
+    [onUploadComplete, patchItem],
   );
 
   const addFiles = useCallback(
     (fileList: FileList | File[]) => {
       const files = Array.from(fileList);
+      const trimmedName = projectName.trim();
 
       files.forEach((file) => {
         const id = nextId();
@@ -92,15 +158,33 @@ export function ReportUpload({
           return;
         }
 
+        // Backend project_name ve category_id'yi ZORUNLU tutuyor; eksikse
+        // istek 422 doner. Kullaniciyi sunucuya gitmeden uyariyoruz.
+        if (!trimmedName || !categoryId) {
+          setItems((current) => [
+            ...current,
+            {
+              id,
+              fileName: file.name,
+              status: "error",
+              progress: 0,
+              errorMessage: !trimmedName
+                ? "Önce proje adını girin."
+                : "Önce bir kategori seçin.",
+            },
+          ]);
+          return;
+        }
+
         setItems((current) => [
           ...current,
-          { id, fileName: file.name, status: "uploading", progress: 0 },
+          { id, fileName: file.name, status: "uploading", progress: 15 },
         ]);
 
-        simulateUpload(id, file.name);
+        void performUpload(id, file, trimmedName, categoryId);
       });
     },
-    [simulateUpload],
+    [categoryId, performUpload, projectName],
   );
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -146,6 +230,13 @@ export function ReportUpload({
     setItems((current) => current.filter((item) => item.id !== id));
   }
 
+  const statusLabels: Record<UploadStatus, string> = {
+    uploading: "Yükleniyor",
+    analyzing: "Analiz ediliyor",
+    success: "Analiz tamamlandı",
+    error: "Hata",
+  };
+
   return (
     <section
       aria-labelledby={dropzoneLabelId}
@@ -156,8 +247,56 @@ export function ReportUpload({
           Rapor Yükleme
         </h2>
         <p className="mt-1 text-sm text-muted">
-          PDF veya Word değerlendirme raporlarını sürükleyip bırakın, ya da göz atarak dosya seçin.
+          Proje adını ve kategoriyi girip PDF veya Word raporunu yükleyin. Yükleme
+          tamamlandığında AI analizi otomatik başlar.
         </p>
+      </div>
+
+      {formError ? (
+        <div
+          role="alert"
+          data-testid="upload-form-error"
+          className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700"
+        >
+          {formError}
+        </div>
+      ) : null}
+
+      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <label htmlFor={projectNameId} className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Proje Adı
+          </span>
+          <input
+            id={projectNameId}
+            type="text"
+            value={projectName}
+            onChange={(event) => setProjectName(event.target.value)}
+            placeholder="Örn. İHA Nesne Tespiti"
+            data-testid="upload-project-name"
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          />
+        </label>
+
+        <label htmlFor={categoryFieldId} className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Kategori
+          </span>
+          <select
+            id={categoryFieldId}
+            value={categoryId}
+            onChange={(event) => setCategoryId(event.target.value)}
+            data-testid="upload-category"
+            className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          >
+            {categories.length === 0 ? <option value="">Kategoriler yükleniyor…</option> : null}
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <div
@@ -197,7 +336,9 @@ export function ReportUpload({
           </svg>
         </span>
         <p className="text-sm font-semibold text-foreground">
-          {isDragging ? "Yüklemek için dosyaları bırakın" : "Dosyaları buraya sürükleyip bırakın veya göz atmak için tıklayın"}
+          {isDragging
+            ? "Yüklemek için dosyaları bırakın"
+            : "Dosyaları buraya sürükleyip bırakın veya göz atmak için tıklayın"}
         </p>
         <p className="text-xs text-muted">Yalnızca PDF veya Word belgeleri</p>
         <input
@@ -227,33 +368,39 @@ export function ReportUpload({
                   <span className="truncate text-sm font-medium text-foreground">
                     {item.fileName}
                   </span>
-                  {item.status === "uploading" && (
+                  {item.status === "uploading" || item.status === "analyzing" ? (
                     <span className="shrink-0 text-xs font-semibold text-muted">
-                      {item.progress}%
+                      {statusLabels[item.status]}…
                     </span>
-                  )}
+                  ) : null}
                   {item.status === "success" && (
                     <span className="shrink-0 text-xs font-semibold text-emerald-600">
-                      Yüklendi
+                      {statusLabels.success}
                     </span>
                   )}
                 </div>
 
-                {item.status === "uploading" && (
+                {(item.status === "uploading" || item.status === "analyzing") && (
                   <div
                     role="progressbar"
-                    aria-label={`${item.fileName} yükleniyor`}
+                    aria-label={`${item.fileName} ${statusLabels[item.status].toLowerCase()}`}
                     aria-valuenow={item.progress}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100"
                   >
                     <div
-                      className="h-full rounded-full bg-brand-600 transition-[width] duration-200"
+                      className="h-full rounded-full bg-brand-600 transition-[width] duration-300"
                       style={{ width: `${item.progress}%` }}
                     />
                   </div>
                 )}
+
+                {item.status === "success" && item.reportId ? (
+                  <p className="mt-1 text-xs text-muted">
+                    Rapor kimliği: <span className="font-semibold">{item.reportId}</span>
+                  </p>
+                ) : null}
 
                 {item.status === "error" && (
                   <p role="alert" className="mt-1 text-xs font-medium text-red-600">
