@@ -13,6 +13,7 @@ import { apiFetch, ApiError } from "./client";
 import {
   buildCategoryNameMap,
   toAiAnalysis,
+  toDecisionOutcome,
   toEvaluationReport,
   type CategoryNameMap,
 } from "./mappers";
@@ -82,6 +83,14 @@ export async function loadCategoryNames(): Promise<CategoryNameMap> {
 
 /* ------------------------------------------------------------ raporlar */
 
+/** Hakemin verdiği nihai karar (henüz verilmediyse null). */
+export interface RefereeDecision {
+  outcome: DecisionOutcome;
+  finalScore: number;
+  rationale: string;
+  submittedAt: string;
+}
+
 export interface ReportWithAnalysis {
   report: EvaluationReport;
   analysis: AiAnalysis | null;
@@ -89,6 +98,7 @@ export interface ReportWithAnalysis {
   rawStatus: string;
   /** Hakem kararı verilmiş mi (verilmişse form tekrar gösterilmemeli). */
   hasDecision: boolean;
+  decision: RefereeDecision | null;
 }
 
 export async function listReports(options: { status?: string } = {}): Promise<EvaluationReport[]> {
@@ -106,11 +116,20 @@ export async function getReport(
 ): Promise<ReportWithAnalysis> {
   const names = categoryNames ?? (await loadCategoryNames());
   const wire = await apiFetch<WireReport>(`/api/reports/${encodeURIComponent(reportId)}`);
+  const decision = wire.final_decision;
   return {
     report: toEvaluationReport(wire, names),
     analysis: toAiAnalysis(wire.ai_analysis),
     rawStatus: wire.status,
-    hasDecision: wire.final_decision !== null,
+    hasDecision: decision !== null,
+    decision: decision
+      ? {
+          outcome: toDecisionOutcome(decision.outcome),
+          finalScore: decision.final_score,
+          rationale: decision.rationale,
+          submittedAt: decision.submitted_at,
+        }
+      : null,
   };
 }
 

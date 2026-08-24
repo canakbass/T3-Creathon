@@ -1,13 +1,12 @@
 import { DashboardShell } from "@/components/dashboard-shell";
 import { RoleGuard } from "@/components/role-guard";
+import { EvaluationDashboard } from "@/components/evaluation/evaluation-dashboard";
 
 export default function EvaluationManagerDashboard() {
   return (
     <RoleGuard requiredRole="EVALUATION_MANAGER">
       <DashboardShell role="EVALUATION_MANAGER">
-        <p className="text-sm text-muted">
-          AI destekli değerlendirme rubriklerini yapılandırın ve sonuçları inceleyin.
-        </p>
+        <EvaluationDashboard />
       </DashboardShell>
     </RoleGuard>
   );
