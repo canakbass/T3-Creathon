@@ -46,19 +46,35 @@ def seed_db():
         if db.query(models.User).count() == 0:
             print("Seeding default users...")
             default_users = [
-                ("manager@teknofest.org", "password123", "COMPETITION_MANAGER"),
-                ("referee@teknofest.org", "password123", "REFEREE"),
-                ("competitor@teknofest.org", "password123", "COMPETITOR"),
-                ("evaluator@teknofest.org", "password123", "EVALUATION_MANAGER"),
+                # (e-posta, sifre, ad, roller)
+                ("manager@teknofest.org", "password123", "Demo Yarışma Yöneticisi",
+                 ["COMPETITION_MANAGER"]),
+                ("referee@teknofest.org", "password123", "Demo Hakem",
+                 ["REFEREE"]),
+                ("referee2@teknofest.org", "password123", "Demo Hakem 2",
+                 ["REFEREE"]),
+                ("competitor@teknofest.org", "password123", "Demo Yarışmacı",
+                 ["COMPETITOR"]),
+                ("evaluator@teknofest.org", "password123", "Demo Değerlendirme Yöneticisi",
+                 ["EVALUATION_MANAGER"]),
+                # COK-ROLLU TEST HESABI: dort rolun hepsine sahip. Giriste
+                # rol secim ekrani cikar; tek hesapla tum akislar denenebilir.
+                ("asdfghjkl@gmail.com", "asdfghjkl", "Test Kullanıcısı",
+                 list(models.ROLLER)),
             ]
-            for email, pwd, role in default_users:
+            for email, pwd, ad, roller in default_users:
                 db_user = models.User(
                     id=str(uuid.uuid4()),
                     email=email,
                     password_hash=auth.hash_password(pwd),
-                    role=role
+                    full_name=ad,
                 )
                 db.add(db_user)
+                db.flush()
+                for rol in roller:
+                    db.add(models.UserRole(
+                        id=str(uuid.uuid4()), user_id=db_user.id, role=rol
+                    ))
             db.commit()
             
         # Check if categories are seeded

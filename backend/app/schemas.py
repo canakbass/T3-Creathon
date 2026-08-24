@@ -13,23 +13,43 @@ class TokenData(BaseModel):
 
 
 # --- User Schemas ---
-class UserBase(BaseModel):
+class UserCreate(BaseModel):
     email: EmailStr
-    role: str
-
-class UserCreate(UserBase):
     password: str
+    full_name: Optional[str] = None
+    # Bir kullanicinin birden fazla rolu olabilir.
+    roles: Optional[List[str]] = None
+    # Tekil `role`, tek rol gonderen eski istemciler icin kabul ediliyor.
+    role: Optional[str] = None
 
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
-class UserResponse(UserBase):
+class RoleSelection(BaseModel):
+    role: str
+
+class UserResponse(BaseModel):
     id: str
+    email: EmailStr
+    full_name: Optional[str] = None
     created_at: datetime
+    roles: List[str] = []
+    # Aktif rol (yoksa ilk rol). Tekil rol bekleyen eski istemciler icin.
+    role: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str
+    # Kullanicinin SAHIP OLDUGU tum roller
+    roles: List[str]
+    # Token'in imzalandigi rol. Cok-rollu kullanici henuz secmediyse None -
+    # arayuz bu durumda rol secim ekrani gosterir.
+    active_role: Optional[str] = None
+    user: UserResponse
 
 
 # --- Category Schemas ---

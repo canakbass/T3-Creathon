@@ -27,7 +27,9 @@ def test_register_duplicate_email(client):
         json={"email": "dup@teknofest.org", "password": "pwd2", "role": "COMPETITOR"}
     )
     assert response.status_code == 400
-    assert response.json()["detail"] == "Email already registered."
+    # Mesaj Turkce'ye cevrildi; testin amaci mesajin birebir metni degil,
+    # ayni e-postayla ikinci kaydin REDDEDILMESI.
+    assert "kayitli" in response.json()["detail"].lower()
 
 
 def test_login_user(client):
@@ -54,7 +56,7 @@ def test_login_invalid_credentials(client):
         data={"username": "nonexistent@teknofest.org", "password": "wrongpassword"}
     )
     assert response.status_code == 401
-    assert response.json()["detail"] == "Incorrect email or password"
+    assert "hatali" in response.json()["detail"].lower()
 
 
 def test_get_me(client):

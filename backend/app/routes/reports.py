@@ -235,11 +235,14 @@ def list_reports(
     current_user: models.User = Depends(auth.get_current_user)
 ):
     query = db.query(models.Report)
-    
-    # Standard role filtering: Competitors only see their own submissions
-    if current_user.role == "COMPETITOR":
+
+    # Rol bazli filtreleme, isteğin AKTIF ROLUNE gore yapiliyor.
+    # Cok-rollu bir kullanici hakem rolundeyken yarismaci raporlarini
+    # gormemeli; hangi rolle hareket ettigi belirleyici.
+    aktif_rol = getattr(current_user, "active_role", None)
+    if aktif_rol == "COMPETITOR":
         query = query.filter(models.Report.submitted_by_id == current_user.id)
-        
+
     if status:
         query = query.filter(models.Report.status == status)
 
@@ -259,11 +262,14 @@ def get_report(
     if not report:
         raise HTTPException(status_code=404, detail="Report not found.")
         
-    # Competitors can only view their own reports
-    if current_user.role == "COMPETITOR" and report.submitted_by_id != current_user.id:
+    # Yarismaci yalnizca KENDI raporunu gorebilir.
+    if (
+        getattr(current_user, "active_role", None) == "COMPETITOR"
+        and report.submitted_by_id != current_user.id
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied to this report."
+            detail="Bu rapora erisim yetkiniz yok.",
         )
         
     # ai_analysis.results semada zorunlu ama veri tabaninda kolon degil -

@@ -54,6 +54,16 @@ def create_access_token(data: dict, expires_delta: datetime.timedelta = None):
     return encoded_jwt
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> models.User:
+    """Token'i dogrular ve kullaniciyi doner.
+
+    Token'daki AKTIF ROL, donen nesneye gecici bir nitelik olarak
+    (`active_role`) ekleniyor. Boylece rotalar ve RoleChecker "bu istek
+    hangi rolle yapiliyor" sorusunu yanitlayabiliyor.
+
+    Aktif rol, kullanicinin veri tabanindaki roller listesine karsi da
+    DOGRULANIYOR: bir kullanicinin rolu geri alindiginda elindeki eski
+    token o rolu kullanmaya devam edememeli.
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -67,20 +77,56 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         token_data = schemas.TokenData(email=email, role=payload.get("role"))
     except jwt.PyJWTError:
         raise credentials_exception
-        
+
     user = db.query(models.User).filter(models.User.email == token_data.email).first()
     if user is None:
         raise credentials_exception
+
+    aktif_rol = token_data.role
+    if aktif_rol is not None and aktif_rol not in user.role_list:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Bu hesap artik '{aktif_rol}' rolune sahip degil. "
+                "Lutfen tekrar giris yapin."
+            ),
+        )
+
+    # SQLAlchemy nesnesine gecici nitelik: veri tabanina yazilmaz.
+    user.active_role = aktif_rol
     return user
+
+
+def get_active_role(current_user: models.User = Depends(get_current_user)) -> str:
+    """Istegin yapildigi aktif rol."""
+    return getattr(current_user, "active_role", None)
+
 
 class RoleChecker:
     def __init__(self, allowed_roles: List[str]):
         self.allowed_roles = allowed_roles
 
     def __call__(self, current_user: models.User = Depends(get_current_user)):
-        if current_user.role not in self.allowed_roles:
+        aktif = getattr(current_user, "active_role", None)
+
+        # Token'da rol yoksa (cok-rollu kullanici henuz rol secmemis) ya da
+        # aktif rol izinli degilse reddediyoruz. Kullanicinin BASKA bir rolu
+        # izinli olsa bile: hangi rolle hareket ettigi acik olmali, aksi
+        # halde "yanlislikla yonetici yetkisiyle islem yapma" mumkun olurdu.
+        if aktif is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Operation not permitted for role: {current_user.role}. Allowed: {self.allowed_roles}",
+                detail=(
+                    "Bu istek icin aktif bir rol secilmemis. "
+                    "/api/auth/select-role ile rolunuzu secin."
+                ),
+            )
+        if aktif not in self.allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"'{aktif}' rolu bu islemi yapamaz. "
+                    f"Izinli roller: {', '.join(self.allowed_roles)}."
+                ),
             )
         return current_user
