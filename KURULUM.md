@@ -21,23 +21,62 @@ cd T3-Creathon
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+```
 
-pip install -r backend/requirements.txt
-pip install -r ai-doc-analysis/requirements.txt
-pip install -r ai-scoring/requirements.txt
+> **Aktivasyona hiç gerek yok.** Aşağıdaki komutlar sanal ortamın Python'ını
+> doğrudan çağırıyor (`.venv/bin/python`). Bu, **bash / zsh / fish / Windows
+> fark etmeksizin** çalışır ve "activate" kaynaklı hataları tamamen ortadan
+> kaldırır.
+>
+> `source .venv/bin/activate` **fish kabuğunda ÇALIŞMAZ** — o bir bash
+> betiğidir ve fish `case ... in` sözdizimini anlamaz. Fish kullanıyorsanız
+> ya `source .venv/bin/activate.fish` yazın ya da (önerilen) aktivasyonu hiç
+> yapmayın.
+
+**Linux / macOS:**
+
+```bash
+.venv/bin/pip install -r backend/requirements.txt \
+                      -r ai-doc-analysis/requirements.txt \
+                      -r ai-scoring/requirements.txt
+```
+
+**Windows (PowerShell):**
+
+```powershell
+.venv\Scripts\pip install -r backend\requirements.txt -r ai-doc-analysis\requirements.txt -r ai-scoring\requirements.txt
 ```
 
 ## 3. Backend ayarları
 
+Tek komut — `.env` dosyasını gizli anahtarı **doldurulmuş halde** oluşturur.
+Elle hiçbir şey yapıştırmanız gerekmez:
+
+**Linux / macOS (bash, zsh, fish — hepsinde çalışır):**
+
 ```bash
-cp backend/.env.example backend/.env
-python -c "import secrets; print(secrets.token_hex(32))"
+.venv/bin/python -c "import secrets,pathlib; p=pathlib.Path('backend/.env'); p.write_text('JWT_SECRET_KEY='+secrets.token_hex(32)+'\n'); print('olusturuldu:', p)"
 ```
 
-Çıkan değeri `backend/.env` içindeki `JWT_SECRET_KEY=` satırının sağına
-yapıştırın. **Diğer satırları boş bırakabilirsiniz** — sistem tamamen
-çalışır (bkz. Bölüm 6).
+**Windows (PowerShell):**
+
+```powershell
+.venv\Scripts\python -c "import secrets,pathlib; p=pathlib.Path('backend/.env'); p.write_text('JWT_SECRET_KEY='+secrets.token_hex(32)+'\n'); print('olusturuldu:', p)"
+```
+
+Kontrol edin — çıktı `JWT_SECRET_KEY=` + 64 karakter olmalı:
+
+```bash
+cat backend/.env
+```
+
+> **Sık yapılan hata:** `JWT_SECRET_KEY=` satırının sağına komutun kendisini
+> (`python -c "import secrets..."`) yazmayın; komutu **çalıştırıp çıkan
+> değeri** yazın. Yukarıdaki tek satırlık komut bunu zaten sizin için
+> yapıyor.
+
+LLM ayarları (Bölüm 6) isteğe bağlı — **boş bırakırsanız sistem tamamen
+çalışır.**
 
 > `backend/.env` `.gitignore`'da; anahtarlarınız repoya sızmaz.
 
@@ -50,19 +89,26 @@ cd frontend && npm install && cd ..
 
 ## 5. Çalıştır (iki terminal)
 
-**1. terminal — backend:**
+**1. terminal — backend** (repo kökünden, aktivasyon gerekmez):
 
 ```bash
-cd T3-Creathon
-source .venv/bin/activate
 cd backend
-python -m uvicorn main:app --reload --port 8000
+../.venv/bin/python -m uvicorn main:app --reload --port 8000
 ```
 
-**2. terminal — frontend:**
+Windows (PowerShell):
+
+```powershell
+cd backend
+..\.venv\Scripts\python -m uvicorn main:app --reload --port 8000
+```
+
+`Uvicorn running on http://127.0.0.1:8000` görmelisiniz.
+
+**2. terminal — frontend** (repo kökünden):
 
 ```bash
-cd T3-Creathon/frontend
+cd frontend
 npm run dev
 ```
 
@@ -147,14 +193,17 @@ açmasın diye.
 
 ## 7. Testler
 
-```bash
-source .venv/bin/activate
+Repo kökünden, aktivasyon gerekmez:
 
-python ai-doc-analysis/tests/test_analyzer.py     # 32 test
-python ai-scoring/tests/test_scorer.py            # 88 test
-cd backend && python -m pytest tests/ -v && cd .. #  9 test
-cd frontend && npm test && cd ..                  # 87 test
+```bash
+.venv/bin/python ai-doc-analysis/tests/test_analyzer.py    # 32 test
+.venv/bin/python ai-scoring/tests/test_scorer.py           # 84-91 test *
+cd backend && ../.venv/bin/python -m pytest tests/ -v; cd ..   #  9 test
+cd frontend && npm test; cd ..                             # 87 test
 ```
+
+\* `google-genai` kuruluysa 91, değilse 84 — Gemini'ye özel testler
+opsiyonel SDK yokken atlanıyor.
 
 ---
 
@@ -169,4 +218,8 @@ cd frontend && npm test && cd ..                  # 87 test
 | Analiz hep "Analiz ediliyor…" kalıyor | Backend terminalindeki hatayı okuyun. Bozuk PDF ise analiz yine biter, puan 0 döner. |
 | Gemini "anahtar geçersiz" | Anahtar yanlış ya da AI Studio'dan alınmamış. Kural motoruna otomatik düşer, sistem çökmez. |
 | Gemini "AI_SCORING_LLM_ONAY" uyarısı | Bilinçli bir kapı. Bölüm 6'yı okuyup `evet` yazın. |
-| `python` bulunamadı (Windows) | `py -3` deneyin. |
+| `python` bulunamadı (Windows) | `py -3 -m venv .venv` ile ortamı kurun. |
+| **`activate (line 40): 'case' builtin not inside of switch block`** | **fish kabuğu** kullanıyorsunuz. `.venv/bin/activate` bir bash betiği. Ya `source .venv/bin/activate.fish` yazın ya da (önerilen) hiç aktive etmeyin — bu rehberdeki komutlar `.venv/bin/python`'ı doğrudan çağırıyor. |
+| `No module named uvicorn` | Sistem Python'ı çalışıyor, venv'inki değil. `python` yerine `.venv/bin/python` (Windows: `.venv\Scripts\python`) kullanın. |
+| `cd: The directory 'T3-Creathon' does not exist` | Zaten repo içindesiniz. Baştaki `cd T3-Creathon` satırını atlayın. |
+| `RuntimeWarning: JWT_SECRET_KEY ... geri donuluyor` | `backend/.env` yok ya da boş. Bölüm 3'teki tek satırlık komutu çalıştırın. Sistem yine çalışır ama güvensiz bir varsayılan anahtar kullanır. |
