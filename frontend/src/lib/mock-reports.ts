@@ -1,4 +1,22 @@
-export type ReportStatus = "pending" | "analyzed";
+/**
+ * Backend'in `Report.status` kolonunda tuttuğu tüm değerler
+ * (bkz. backend/app/models.py:58 ve routes/reports.py).
+ *
+ * Başlangıçta arayüz yalnızca "pending" ve "analyzed" tanıyordu; hakem
+ * kararı verildikten sonra backend "approved"/"rejected"/"revise", analiz
+ * çökerse "error" döndürdüğü için liste ve rozet bileşenleri bu değerleri
+ * hiç karşılayamıyordu.
+ */
+export const REPORT_STATUSES = [
+  "pending",
+  "analyzed",
+  "approved",
+  "rejected",
+  "revise",
+  "error",
+] as const;
+
+export type ReportStatus = (typeof REPORT_STATUSES)[number];
 
 export interface EvaluationReport {
   reportId: string;
