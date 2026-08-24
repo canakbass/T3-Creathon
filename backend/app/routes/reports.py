@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import shutil
@@ -6,13 +7,14 @@ import datetime
 from pathlib import Path
 import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from ..database import get_db
 from .. import models, schemas, auth
 from ..services import ai
+from ..services import storage
 from . import competitions
 
 router = APIRouter(prefix="/api/reports", tags=["Reports"])
@@ -115,10 +117,16 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
             {"id": c.id, "name": c.name, "description": c.description} for c in categories
         ]
         
-        # Get existing report files (for similarity checking)
+        # Benzerlik kontrolu icin daha once yuklenmis raporlar.
+        #
+        # DIKKAT: eskiden burada `os.path.exists(r.file_path)` ile filtre
+        # vardi. Supabase Storage devreye girince file_path bir "sb://"
+        # anahtari oluyor ve os.path.exists HER ZAMAN False donerdi - liste
+        # sessizce bosalir, intihal kontrolu hicbir hata vermeden "benzer
+        # rapor yok" demeye baslardi. Bu yuzden storage.local_path() ile
+        # her nesne gecici bir yerel dosyaya indiriliyor.
         other_reports = db.query(models.Report).filter(models.Report.id != report_id).all()
-        existing_paths = [r.file_path for r in other_reports if os.path.exists(r.file_path)]
-        
+
         report = db.query(models.Report).filter(models.Report.id == report_id).first()
 
         # Kriterler: rapor bir YARISMAYA bagliysa o yarismanin kriterleri
@@ -148,14 +156,33 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
         # kategori. Bu olmadan kategori kontrolu yalnizca "en uygun kategori
         # hangisi" diyebiliyordu; asil sorulmasi gereken soru "rapor BEYAN
         # EDILEN kategoriye ait mi" oldugu icin bu bilgiyi da geciyoruz.
-        analysis_data = ai.run_full_analysis(
-            file_path=file_path,
-            db_categories=categories_dict,
-            existing_files=existing_paths,
-            criteria_list=criteria_dict,
-            declared_category_id=report.category_id,
-            rules=rules,
-        )
+        # Analiz edilecek raporun ve karsilastirilacak tum raporlarin YEREL
+        # yollari. ExitStack, hepsini tek blokta acip cikista temizliyor.
+        with contextlib.ExitStack() as stack:
+            yerel_hedef = stack.enter_context(storage.local_path(file_path))
+
+            existing_paths = []
+            for r in other_reports:
+                # Yerel referanslarda dosya diskte yoksa atliyoruz (eski
+                # davranis buydu); uzak referanslarda indirme denenip
+                # basarisiz olursa asagidaki except yakaliyor.
+                if not storage.is_remote(r.file_path) and not os.path.exists(r.file_path):
+                    continue
+                try:
+                    existing_paths.append(stack.enter_context(storage.local_path(r.file_path)))
+                except Exception as exc:
+                    # Tek bir eski rapor okunamazsa tum analiz dusmemeli;
+                    # o rapor karsilastirmadan cikariliyor.
+                    print(f"Karsilastirilacak rapor okunamadi ({r.id}): {exc}")
+
+            analysis_data = ai.run_full_analysis(
+                file_path=yerel_hedef,
+                db_categories=categories_dict,
+                existing_files=existing_paths,
+                criteria_list=criteria_dict,
+                declared_category_id=report.category_id,
+                rules=rules,
+            )
         
         # Save analysis results
         db_analysis = models.AiAnalysis(
@@ -255,7 +282,11 @@ async def upload_report(
         )
         
     report_id = f"RPT-2026-{str(uuid.uuid4())[:6].upper()}"
-    file_path = os.path.join(UPLOAD_DIR, f"{report_id}{ext}")
+    dosya_adi = f"{report_id}{ext}"
+    # Once gecici bir dosyaya yaziyoruz; storage.save() onu kalici depoya
+    # (yerel disk ya da Supabase Storage) tasiyip nihai referansi donuyor.
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    gecici_yol = os.path.join(UPLOAD_DIR, f".tmp-{dosya_adi}")
 
     # Dosyayi diske YAZARKEN olay dongusunu (event loop) bloklamiyoruz.
     #
@@ -272,7 +303,21 @@ async def upload_report(
     # tasiyor; shutil.copyfileobj ise parca parca kopyaladigi icin dosya
     # bellege sigmak zorunda kalmiyor. anyio yeni bir bagimlilik degil -
     # starlette (dolayisiyla FastAPI) zaten ona bagli.
-    await anyio.to_thread.run_sync(_dosyayi_diske_yaz, file, file_path)
+    await anyio.to_thread.run_sync(_dosyayi_diske_yaz, file, gecici_yol)
+
+    # Kalici depoya tasi. Supabase yapilandirilmissa "sb://..." referansi,
+    # degilse "uploads/..." yolu doner - cagiran kod ikisini de ayni
+    # sekilde kullaniyor (bkz. app/services/storage.py).
+    try:
+        file_path = await anyio.to_thread.run_sync(storage.save, gecici_yol, dosya_adi)
+    except Exception as exc:
+        # Gecici dosya ortada kalmasin.
+        if os.path.exists(gecici_yol):
+            os.remove(gecici_yol)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Rapor dosyasi kaydedilemedi: {exc}",
+        )
 
     # Create Report record (status = pending)
     db_report = models.Report(
@@ -404,6 +449,32 @@ def get_report_file(
             detail="Bu raporun dosyasina erisim yetkiniz yok.",
         )
 
+    uzanti = Path(report.file_path).suffix.lower()
+    medya_tipi = storage.media_type(report.file_path)
+    gosterim_adi = report.original_filename or f"{report.id}{uzanti}"
+    yerlesim = "attachment" if download else "inline"
+
+    # Supabase Storage referansi: dosya diskte degil, bayt olarak akitiyoruz.
+    #
+    # Yol dogrulamasi burada GEREKMIYOR ve UYGULANAMAZ: "sb://" bir dosya
+    # sistemi yolu degil, bucket icindeki bir nesne anahtari. Dizin
+    # gezinmesi (../) bucket API'sinden mumkun degil.
+    if storage.is_remote(report.file_path):
+        try:
+            icerik = storage.read_bytes(report.file_path)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Rapor dosyasi depodan alinamadi: {exc}",
+            )
+        return Response(
+            content=icerik,
+            media_type=medya_tipi,
+            headers={
+                "Content-Disposition": f'{yerlesim}; filename="{gosterim_adi}"',
+            },
+        )
+
     # Yol dogrulamasi: file_path veri tabanindan geliyor ama yine de
     # UPLOAD_DIR disina cikmadigini kontrol ediyoruz. Veri tabanina bir
     # sekilde "../../etc/passwd" yazilsa bile dosya servis edilmemeli.
@@ -423,17 +494,6 @@ def get_report_file(
             detail="Rapor kaydi var ama dosya diskte bulunamadi.",
         )
 
-    uzanti = hedef.suffix.lower()
-    medya_tipi = {
-        ".pdf": "application/pdf",
-        ".doc": "application/msword",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    }.get(uzanti, "application/octet-stream")
-
-    # Kullaniciya gosterilecek ad: yukleyenin verdigi orijinal ad varsa o,
-    # yoksa rapor kimligi. Diskteki ad her zaman normalize edilmis.
-    gosterim_adi = report.original_filename or f"{report.id}{uzanti}"
-
     # Dosya adini HER IKI durumda da veriyoruz: Starlette, filename=None
     # oldugunda Content-Disposition basligini hic gondermiyor ve tarayicinin
     # varsayilanina kaliyoruz. Basligi acikca gondermek, gomulu
@@ -442,7 +502,7 @@ def get_report_file(
         path=str(hedef),
         media_type=medya_tipi,
         filename=gosterim_adi,
-        content_disposition_type="attachment" if download else "inline",
+        content_disposition_type=yerlesim,
     )
 
 

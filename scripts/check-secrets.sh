@@ -23,12 +23,18 @@ while IFS= read -r f; do
   fi
 done < <(git ls-files)
 
-# .env.example dosyalarinda dolu deger var mi
+# .env.example dosyalarinda GIZLI bir degerin doldurulup doldurulmadigi.
+#
+# Gizli olmayan varsayilanlar (bucket adi, CORS listesi, backend adresi)
+# ornek dosyada DOLU olmali - kullanisli oluyorlar. Yalnizca kimlik bilgisi
+# tasiyabilecek anahtarlarin bos kalmasini sart kosuyoruz.
+GIZLI_ANAHTARLAR='JWT_SECRET_KEY|GOOGLE_API_KEY|GEMINI_API_KEY|ANTHROPIC_API_KEY|SUPABASE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|.*_PASSWORD|.*_TOKEN'
+
 while IFS= read -r f; do
   [ -f "$f" ] || continue
-  if grep -qE '^[A-Z_]+=.+$' "$f" 2>/dev/null; then
-    echo "ORNEK DOSYADA DOLU DEGER: $f"
-    grep -nE '^[A-Z_]+=.+$' "$f" | head -5
+  if grep -qE "^($GIZLI_ANAHTARLAR)=.+$" "$f" 2>/dev/null; then
+    echo "ORNEK DOSYADA GIZLI DEGER DOLU: $f"
+    grep -nE "^($GIZLI_ANAHTARLAR)=.+$" "$f" | sed 's/=.*/=<GIZLENDI>/' | head -5
     BULUNAN=1
   fi
 done < <(git ls-files | grep -E '\.env.*example')

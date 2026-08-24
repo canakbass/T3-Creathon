@@ -12,3 +12,12 @@ httpx>=0.27.0
 # Hasan'in ai-doc-analysis modulu icin (app/services/ai.py analyze_document)
 pdfplumber
 langdetect
+
+# --- Supabase (ISTEGE BAGLI) ---
+# Bunlar kurulu OLMASA da sistem calisir: DATABASE_URL yoksa SQLite,
+# SUPABASE_URL yoksa yerel disk kullaniliyor.
+#
+# Postgres surucusu. Python 3.14 icin hazir tekerlek (wheel) mevcut.
+psycopg2-binary>=2.9.12
+# Supabase Storage istemcisi (storage3'u de getiriyor).
+supabase>=2.31.0

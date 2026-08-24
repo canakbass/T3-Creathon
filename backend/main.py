@@ -1,3 +1,4 @@
+import os
 import uuid
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +14,7 @@ from app.routes import (
     competitions as competitions_router,
 )
 from app import models, auth
+from app.services import storage
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -23,10 +25,21 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for the Next.js frontend
+# CORS. Yayina alindiginda Vercel adresi de gerekiyor, o yuzden ortam
+# degiskeninden okunuyor (virgulle ayrilmis liste).
+#
+# DIKKAT: tarayici HTTPS uzerinden servis edilen bir sayfadan HTTP bir
+# backend'e istek atamaz (karisik icerik engeli) - dagitimda backend de
+# HTTPS olmali.
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,6 +62,9 @@ def read_root():
 # Seed database with initial data on startup if empty
 @app.on_event("startup")
 def seed_db():
+    # Dosya deposunu hazirla (Supabase bucket'i ya da yerel uploads dizini).
+    storage.ensure_bucket()
+
     db = SessionLocal()
     try:
         # Check if users are seeded
