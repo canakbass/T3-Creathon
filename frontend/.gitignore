@@ -35,6 +35,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...ama ornek dosya commit'lenmeli: icinde gizli bilgi yok, sadece
+# backend adresi var ve ekibin kurulumu icin gerekli.
+!.env.local.example
 
 # vercel
 .vercel
