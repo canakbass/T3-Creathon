@@ -1,0 +1,301 @@
+"""Rapor-hakem atamasi.
+
+NEDEN VAR: onceden atama diye bir sey YOKTU - her hakem her raporu
+goruyordu. Gercek bir degerlendirme surecinde raporlar hakemler arasinda
+dagitilir ve her hakem yalnizca kendi sorumlulugundakini gorur.
+
+AKIS:
+  1. Yarisma Yoneticisi yarismaya hakem ekler (POST /referees)
+  2. Raporlar geldikce otomatik dagitilir (POST /auto-assign) - en az yuku
+     olan hakeme gider, boylece dagilim dengeli kalir
+  3. Yonetici gerekirse tek bir raporun hakemini degistirir (PUT /{report_id})
+"""
+
+import uuid
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+
+from ..database import get_db
+from .. import models, schemas, auth
+
+router = APIRouter(prefix="/api/assignments", tags=["Assignments"])
+
+# Atama islemlerini yalnizca yarismayi yoneten roller yapabilir.
+_YONETICI = auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+
+
+def _hakem_mi(db: Session, user_id: str) -> bool:
+    return (
+        db.query(models.UserRole)
+        .filter(models.UserRole.user_id == user_id, models.UserRole.role == "REFEREE")
+        .first()
+        is not None
+    )
+
+
+@router.get("/referees", response_model=List[schemas.RefereeSummary])
+def list_referees(
+    competition_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(_YONETICI),
+):
+    """Hakemleri ve uzerlerindeki rapor sayisini listeler.
+
+    `competition_id` verilirse yalnizca o yarismada gorevli hakemler doner.
+    Yuk bilgisi, yoneticinin dagilimi gorup elle mudahale edebilmesi icin.
+    """
+    if competition_id:
+        kayitlar = (
+            db.query(models.CompetitionReferee)
+            .filter(models.CompetitionReferee.competition_id == competition_id)
+            .all()
+        )
+        hakemler = [k.referee for k in kayitlar if k.referee]
+    else:
+        hakem_idleri = [
+            r.user_id
+            for r in db.query(models.UserRole)
+            .filter(models.UserRole.role == "REFEREE")
+            .all()
+        ]
+        hakemler = (
+            db.query(models.User).filter(models.User.id.in_(hakem_idleri)).all()
+            if hakem_idleri
+            else []
+        )
+
+    sonuc = []
+    for h in hakemler:
+        q = db.query(models.Assignment).filter(models.Assignment.referee_id == h.id)
+        if competition_id:
+            q = q.join(models.Report).filter(models.Report.competition_id == competition_id)
+        sonuc.append(
+            {
+                "id": h.id,
+                "email": h.email,
+                "full_name": h.full_name,
+                "assigned_count": q.count(),
+            }
+        )
+    # En az yuklu once: yonetici kime atayacagina bakarken faydali
+    sonuc.sort(key=lambda x: x["assigned_count"])
+    return sonuc
+
+
+@router.post(
+    "/competitions/{competition_id}/referees",
+    status_code=status.HTTP_201_CREATED,
+    response_model=schemas.RefereeSummary,
+)
+def add_referee_to_competition(
+    competition_id: str,
+    govde: schemas.RefereeAdd,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(_YONETICI),
+):
+    """Yarismaya hakem ekler. Atama yalnizca bu listedekilere yapilabilir."""
+    yarisma = db.query(models.Competition).filter(
+        models.Competition.id == competition_id
+    ).first()
+    if not yarisma:
+        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+
+    hakem = db.query(models.User).filter(models.User.id == govde.referee_id).first()
+    if not hakem:
+        raise HTTPException(status_code=404, detail="Kullanici bulunamadi.")
+    if not _hakem_mi(db, hakem.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{hakem.email} hakem rolune sahip degil.",
+        )
+
+    zaten = (
+        db.query(models.CompetitionReferee)
+        .filter(
+            models.CompetitionReferee.competition_id == competition_id,
+            models.CompetitionReferee.referee_id == hakem.id,
+        )
+        .first()
+    )
+    if zaten:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bu hakem yarismada zaten gorevli.",
+        )
+
+    db.add(
+        models.CompetitionReferee(
+            id=str(uuid.uuid4()), competition_id=competition_id, referee_id=hakem.id
+        )
+    )
+    db.commit()
+    return {
+        "id": hakem.id,
+        "email": hakem.email,
+        "full_name": hakem.full_name,
+        "assigned_count": 0,
+    }
+
+
+@router.post(
+    "/competitions/{competition_id}/auto-assign",
+    response_model=schemas.AutoAssignResult,
+)
+def auto_assign(
+    competition_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(_YONETICI),
+):
+    """Yarismanin ATANMAMIS raporlarini hakemler arasinda dengeli dagitir.
+
+    Dagitim, "en az yuku olana ver" kuralina gore yapiliyor. Bu, mevcut
+    yuku de hesaba kattigi icin elle yapilmis atamalardan sonra calistirilsa
+    bile dengeyi bozmuyor. ZATEN ATANMIS raporlara dokunmuyor - yoneticinin
+    elle yaptigi atama korunur.
+    """
+    yarisma = db.query(models.Competition).filter(
+        models.Competition.id == competition_id
+    ).first()
+    if not yarisma:
+        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+
+    hakem_kayitlari = (
+        db.query(models.CompetitionReferee)
+        .filter(models.CompetitionReferee.competition_id == competition_id)
+        .all()
+    )
+    hakemler = [k.referee for k in hakem_kayitlari if k.referee]
+    if not hakemler:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bu yarismada gorevli hakem yok. Once hakem ekleyin.",
+        )
+
+    atanmamis = (
+        db.query(models.Report)
+        .outerjoin(models.Assignment)
+        .filter(
+            models.Report.competition_id == competition_id,
+            models.Assignment.id.is_(None),
+        )
+        .order_by(models.Report.submission_date)
+        .all()
+    )
+
+    # Mevcut yuk (bu yarismadaki)
+    yuk = {}
+    for h in hakemler:
+        yuk[h.id] = (
+            db.query(models.Assignment)
+            .join(models.Report)
+            .filter(
+                models.Assignment.referee_id == h.id,
+                models.Report.competition_id == competition_id,
+            )
+            .count()
+        )
+
+    yeni = []
+    for rapor in atanmamis:
+        # En az yuklu hakem; esitlikte e-postaya gore deterministik secim
+        # (ayni girdi her zaman ayni dagitimi versin diye)
+        hedef = min(hakemler, key=lambda h: (yuk[h.id], h.email))
+        db.add(
+            models.Assignment(
+                id=str(uuid.uuid4()),
+                report_id=rapor.id,
+                referee_id=hedef.id,
+                assigned_by_id=current_user.id,
+                auto_assigned=True,
+            )
+        )
+        yuk[hedef.id] += 1
+        yeni.append({"report_id": rapor.id, "referee_id": hedef.id, "referee_email": hedef.email})
+
+    db.commit()
+    return {
+        "assigned": len(yeni),
+        "assignments": yeni,
+        "load": [
+            {"referee_id": h.id, "email": h.email, "assigned_count": yuk[h.id]}
+            for h in sorted(hakemler, key=lambda x: x.email)
+        ],
+    }
+
+
+@router.put("/{report_id}", response_model=schemas.AssignmentResponse)
+def reassign(
+    report_id: str,
+    govde: schemas.AssignmentUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(_YONETICI),
+):
+    """Bir raporun sorumlu hakemini degistirir (ya da ilk kez atar).
+
+    Yonetici, dagitim otomatik yapilmis olsa bile tek tek mudahale
+    edebilmeli - orn. cikar catismasi ya da uzmanlik alani nedeniyle.
+    """
+    rapor = db.query(models.Report).filter(models.Report.id == report_id).first()
+    if not rapor:
+        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
+
+    hakem = db.query(models.User).filter(models.User.id == govde.referee_id).first()
+    if not hakem or not _hakem_mi(db, hakem.id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gecerli bir hakem secin.",
+        )
+
+    # Karar verilmis raporun hakemi degistirilemez: karar zaten kayitli ve
+    # baska bir hakeme devretmek denetim izini bozar.
+    if rapor.final_decision is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bu rapor icin nihai karar verilmis; hakemi degistirilemez.",
+        )
+
+    atama = rapor.assignment
+    if atama:
+        atama.referee_id = hakem.id
+        atama.assigned_by_id = current_user.id
+        atama.auto_assigned = False
+    else:
+        atama = models.Assignment(
+            id=str(uuid.uuid4()),
+            report_id=rapor.id,
+            referee_id=hakem.id,
+            assigned_by_id=current_user.id,
+            auto_assigned=False,
+        )
+        db.add(atama)
+    db.commit()
+    db.refresh(atama)
+    return _atama_yaniti(atama)
+
+
+@router.delete("/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
+def unassign(
+    report_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(_YONETICI),
+):
+    """Atamayi kaldirir (rapor tekrar dagitilmamis havuza doner)."""
+    atama = db.query(models.Assignment).filter(
+        models.Assignment.report_id == report_id
+    ).first()
+    if not atama:
+        raise HTTPException(status_code=404, detail="Bu rapor icin atama yok.")
+    db.delete(atama)
+    db.commit()
+
+
+def _atama_yaniti(atama: models.Assignment) -> dict:
+    return {
+        "report_id": atama.report_id,
+        "referee_id": atama.referee_id,
+        "referee_email": atama.referee.email if atama.referee else None,
+        "assigned_at": atama.assigned_at,
+        "auto_assigned": atama.auto_assigned,
+    }

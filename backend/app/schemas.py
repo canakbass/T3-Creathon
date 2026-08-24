@@ -41,6 +41,42 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class RefereeSummary(BaseModel):
+    id: str
+    email: EmailStr
+    full_name: Optional[str] = None
+    # Uzerindeki rapor sayisi - yonetici dagilimi gorup mudahale edebilsin.
+    assigned_count: int = 0
+
+class RefereeAdd(BaseModel):
+    referee_id: str
+
+class AssignmentUpdate(BaseModel):
+    referee_id: str
+
+class AssignmentResponse(BaseModel):
+    report_id: str
+    referee_id: str
+    referee_email: Optional[EmailStr] = None
+    assigned_at: datetime
+    auto_assigned: bool
+
+class AutoAssignItem(BaseModel):
+    report_id: str
+    referee_id: str
+    referee_email: EmailStr
+
+class RefereeLoad(BaseModel):
+    referee_id: str
+    email: EmailStr
+    assigned_count: int
+
+class AutoAssignResult(BaseModel):
+    assigned: int
+    assignments: List[AutoAssignItem]
+    load: List[RefereeLoad]
+
+
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str

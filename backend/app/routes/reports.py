@@ -3,8 +3,10 @@ import os
 import shutil
 import uuid
 import datetime
+from pathlib import Path
 import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -214,6 +216,10 @@ async def upload_report(
         category_id=category_id,
         status="pending",
         file_path=file_path,
+        # Diskteki ad RPT-2026-XXXXXX.pdf seklinde normalize ediliyor;
+        # indirme sirasinda kullaniciya kendi verdigi adi gosterebilmek
+        # icin orijinali de sakliyoruz.
+        original_filename=file.filename,
         submitted_by_id=current_user.id,
         submission_date=datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     )
@@ -242,6 +248,18 @@ def list_reports(
     aktif_rol = getattr(current_user, "active_role", None)
     if aktif_rol == "COMPETITOR":
         query = query.filter(models.Report.submitted_by_id == current_user.id)
+    elif aktif_rol == "REFEREE":
+        # Hakem yalnizca KENDISINE ATANMIS raporlari gorur.
+        #
+        # Gecis notu: atamasi HIC OLMAYAN raporlar da gosteriliyor. Sebep,
+        # atama sistemi yeni eklendi ve daha once yuklenmis raporlarin
+        # atamasi yok; bunlari gizlemek eski verinin kaybolmasi gibi
+        # gorunurdu. Yarisma akisi tam oturunca (her rapor bir yarismaya
+        # bagli ve dagitim yapiliyor) bu gevsetme kaldirilabilir.
+        query = query.outerjoin(models.Assignment).filter(
+            (models.Assignment.referee_id == current_user.id)
+            | (models.Assignment.id.is_(None))
+        )
 
     if status:
         query = query.filter(models.Report.status == status)
@@ -275,6 +293,91 @@ def get_report(
     # ai_analysis.results semada zorunlu ama veri tabaninda kolon degil -
     # yanit oncesi duz kolonlardan uretiliyor (bkz. _attach_analysis_results).
     return _attach_analysis_results(report)
+
+
+def _rapora_erisebilir_mi(report: models.Report, user: models.User) -> bool:
+    """Bu kullanici bu raporun DOSYASINI gorebilir mi.
+
+    - Yarismaci: yalnizca kendi raporu
+    - Hakem: yalnizca kendisine ATANMIS rapor (atama yoksa goremez)
+    - Yarisma/Degerlendirme Yoneticisi: hepsi
+    """
+    aktif = getattr(user, "active_role", None)
+    if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
+        return True
+    if aktif == "COMPETITOR":
+        return report.submitted_by_id == user.id
+    if aktif == "REFEREE":
+        return report.assignment is not None and report.assignment.referee_id == user.id
+    return False
+
+
+@router.get("/{report_id}/file")
+def get_report_file(
+    report_id: str,
+    download: bool = False,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    """Raporun kendisini (PDF/Word) servis eder.
+
+    NEDEN EKLENDI: boyle bir uc nokta HIC YOKTU. Hakem, okuyamadigi bir
+    raporu degerlendiriyordu - sistemde yalnizca AI'nin ozeti vardi, belgenin
+    kendisi yoktu. Bir hakem karar destek sisteminde bu temel bir eksik.
+
+    `download=false` (varsayilan) tarayicinin gomulu goruntuleyicisinde
+    acilmasi icin `inline` doner; `download=true` indirme baslatir.
+    """
+    report = db.query(models.Report).filter(models.Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
+
+    if not _rapora_erisebilir_mi(report, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu raporun dosyasina erisim yetkiniz yok.",
+        )
+
+    # Yol dogrulamasi: file_path veri tabanindan geliyor ama yine de
+    # UPLOAD_DIR disina cikmadigini kontrol ediyoruz. Veri tabanina bir
+    # sekilde "../../etc/passwd" yazilsa bile dosya servis edilmemeli.
+    kok = Path(UPLOAD_DIR).resolve()
+    try:
+        hedef = Path(report.file_path).resolve()
+        hedef.relative_to(kok)
+    except (ValueError, OSError):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Rapor dosyasinin yolu gecersiz.",
+        )
+
+    if not hedef.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Rapor kaydi var ama dosya diskte bulunamadi.",
+        )
+
+    uzanti = hedef.suffix.lower()
+    medya_tipi = {
+        ".pdf": "application/pdf",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }.get(uzanti, "application/octet-stream")
+
+    # Kullaniciya gosterilecek ad: yukleyenin verdigi orijinal ad varsa o,
+    # yoksa rapor kimligi. Diskteki ad her zaman normalize edilmis.
+    gosterim_adi = report.original_filename or f"{report.id}{uzanti}"
+
+    # Dosya adini HER IKI durumda da veriyoruz: Starlette, filename=None
+    # oldugunda Content-Disposition basligini hic gondermiyor ve tarayicinin
+    # varsayilanina kaliyoruz. Basligi acikca gondermek, gomulu
+    # goruntuleyicide acilmasini garantiliyor.
+    return FileResponse(
+        path=str(hedef),
+        media_type=medya_tipi,
+        filename=gosterim_adi,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @router.post("/{report_id}/decision", response_model=schemas.FinalDecisionResponse)

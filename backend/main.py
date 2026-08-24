@@ -4,7 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from app.database import engine, Base, SessionLocal
-from app.routes import auth as auth_router, criteria as criteria_router, reports as reports_router, dashboard as dashboard_router
+from app.routes import (
+    auth as auth_router,
+    criteria as criteria_router,
+    reports as reports_router,
+    dashboard as dashboard_router,
+    assignments as assignments_router,
+)
 from app import models, auth
 
 # Create database tables
@@ -30,6 +36,7 @@ app.include_router(auth_router.router)
 app.include_router(criteria_router.router)
 app.include_router(reports_router.router)
 app.include_router(dashboard_router.router)
+app.include_router(assignments_router.router)
 
 
 @app.get("/")
