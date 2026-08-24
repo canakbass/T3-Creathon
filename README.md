@@ -14,24 +14,27 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 | `ai-doc-analysis/` | Hasan | Dil/şablon/başlık kontrolü | ✅ Çalışıyor, gerçek veriyle test edildi (32 test) |
 | `ai-scoring/` | Hayrettin | Kategori, benzerlik, kriter puanlama | ✅ Çalışıyor, backend'e entegre edildi (76 test) — mock'lar kaldırıldı |
 | `backend/` | Mustafa | FastAPI + SQLite — API, veri modeli, auth | ✅ Çalışıyor (auth, upload, analiz akışı, hakem kararı) — 9 test; iki hata düzeltildi (aşağıda) |
-| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ⚠️ Arayüz çalışıyor (74 test geçiyor) ama **backend'e hiç bağlı değil** — tüm veri mock (aşağıda) |
+| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Çalışıyor ve **backend'e bağlandı** — 87 test; tüm mock veri kaldırıldı |
 | `docs/` | — | Ortak dokümanlar, API sözleşmesi, MVP kuralları | Güncel |
 
-## MVP'nin 6 zorunlu maddesi — güncel durum
+## MVP'nin 6 zorunlu maddesi — hepsi tamam
 
 | # | Madde | Durum |
 |---|---|---|
-| 1 | Dil/şablon kontrolü | ✅ Hasan — gerçek kod, backend'e bağlı |
-| 2 | Başlık/içerik kontrolü | ✅ Hasan — gerçek kod, backend'e bağlı |
-| 3 | Kategori uygunluğu | ✅ Hayrettin — gerçek kod, backend'e bağlı |
-| 4 | Benzerlik analizi | ✅ Hayrettin — gerçek kod, backend'e bağlı |
-| 5 | AI kriter değerlendirmesi (puan + gerekçe) | ✅ Hayrettin — gerçek kod, backend'e bağlı |
-| 6 | Hakemin görüp nihai kararı verebildiği arayüz | ⚠️ **API tarafı çalışıyor, arayüz backend'e bağlı değil** |
+| 1 | Dil/şablon kontrolü | ✅ Hasan — gerçek kod, uçtan uca çalışıyor |
+| 2 | Başlık/içerik kontrolü | ✅ Hasan — gerçek kod, uçtan uca çalışıyor |
+| 3 | Kategori uygunluğu | ✅ Hayrettin — gerçek kod, uçtan uca çalışıyor |
+| 4 | Benzerlik analizi | ✅ Hayrettin — gerçek kod, uçtan uca çalışıyor |
+| 5 | AI kriter değerlendirmesi (puan + gerekçe) | ✅ Hayrettin — gerçek kod, uçtan uca çalışıyor |
+| 6 | Hakemin görüp nihai kararı verebildiği arayüz | ✅ Arayüz canlı API'ye bağlı, hakem AI önerisini ezebiliyor |
 
-Madde 1-5 uçtan uca doğrulandı: gerçek bir KTR PDF'i yükleyip API'den
-analizi okuyup hakem kararı verme akışı 40 testle sınandı (aşağıya bakın).
-Madde 6'nın backend yarısı (`POST /api/reports/{id}/decision`, hakemin AI
-önerisini ezebilmesi) çalışıyor; eksik olan frontend'in API'ye bağlanması.
+**Demo akışı (gerçek veriyle doğrulandı):** Yarışma Yöneticisi giriş yapar →
+proje adı + kategori girip gerçek bir PDF yükler → analiz arka planda çalışır
+(~2 sn) → Hakem giriş yapar, raporu açar, dört AI kontrolünü ve "AI Dördüncü
+Göz" önerisini görür → kendi puanını verip AI önerisini ezer → Yarışmacı
+kendi panelinde sonucunu, güçlü yönlerini ve gelişim önerilerini görür
+(benzerlik/intihal verisi ve AI'nın önerdiği puan yarışmacıya **gösterilmez**)
+→ Değerlendirme Yöneticisi tamamlanma oranını izler.
 
 **Not:** `backend/` ve `frontend/`, Mahmut/Mustafa'nın ayrı ilerlettiği
 [t3creathon_web](https://github.com/mahmutconger/t3creathon_web) reposundan
@@ -123,37 +126,59 @@ gösterilecek `guclu_yonler`/`gelisim_onerileri` alanlarını döndürüyor ama
 şemada yer olmadığı için kaydedilemiyorlar; şimdilik `rationale` metninin
 içine gömülü geliyorlar. Tek taraflı şema değişikliği yapmadım.
 
-## Mahmut — kritik: frontend backend'e hiç bağlı değil
+## Mahmut — frontend backend'e bağlandı (2026-08-24)
 
-Arayüz çalışıyor ve 74 jest testi geçiyor, ama **hiçbir HTTP isteği
-atmıyor.** `frontend/src` içinde `fetch`/`axios` çağrısı, API istemci
-katmanı, `NEXT_PUBLIC_*` ortam değişkeni yok. Tüm veri yerel mock:
+Arayüz artık gerçek API'yi kullanıyor. Tüm mock veri uygulamadan kaldırıldı
+(mock sabitleri yalnızca test fixture'ı olarak duruyor).
 
-- `referee-dashboard.tsx` → `setTimeout(() => setReports(getMockReports()))` — sahte gecikme
-- `report-upload.tsx` → `simulateUpload()` sahte progress bar, dosyayı hiç göndermiyor
-- `dashboard/referee/[id]/page.tsx` → `getMockAnalysis(id)`
-- `store/auth-store.ts` → sadece bir `role` string'i tutuyor, token yok, login çağrısı yok
+**Eklenen API katmanı** — `frontend/src/lib/api/`:
 
-Yani **MVP madde 6 henüz kapanmadı**: backend tarafı hazır ve test edildi
-(hakem AI önerisini ezip nihai karar verebiliyor), eksik olan arayüzün API'ye
-bağlanması. Demo Day'de gösterilecek akış bu, öncelik burada.
+| Dosya | İş |
+|---|---|
+| `client.ts` | Tek `fetch` sarmalayıcı: token enjeksiyonu, `ApiError`/`NetworkError` ayrımı, 401'de oturum düşürme |
+| `types.ts` | Backend'in tel formatı (snake_case). Bileşenler bu tipleri hiç görmez |
+| `mappers.ts` | Tel → arayüz tipi çevirisi |
+| `index.ts` | Uç nokta fonksiyonları + `pollUntilAnalyzed` |
+| `errors.ts` | Hata → Türkçe cümle |
 
-Bağlarken dikkat edilecek iki şey:
+**Çözülen üç şekil uyuşmazlığı:** isimlendirme (snake_case ↔ camelCase),
+yuvalama (backend `suggested_score/outcome/rationale`'ı **düz** verir, arayüz
+`suggestion: {score, outcome, rationale}` bekler), ve kimlik (backend
+`category_id` verir, arayüz kategori **adı** gösterir — `/api/categories`'ten
+haritalanıyor).
 
-- **Alan adı/şekli uyuşmuyor.** Backend snake_case ve öneriyi **düz** veriyor
-  (`suggested_score`, `suggested_outcome`, `rationale`); frontend camelCase ve
-  **iç içe** bekliyor (`suggestion: {score, outcome, rationale}`). Ayrıca
-  backend analizi `ReportResponse.ai_analysis` altında iç içe veriyor,
-  frontend rapor ile analizi iki ayrı nesne olarak bekliyor. Bir eşleme
-  katmanı gerekiyor. İçteki `results` haritası ise birebir uyuyor —
-  `languageTemplate`/`contentHeading`/`categoryMatch`/`similarity`.
+**Bağlanan ekranlar:** giriş (gerçek JWT), hakem panosu + rapor detayı +
+nihai karar, rapor yükleme (gerçek multipart), yarışmacı sonuç paneli,
+değerlendirme yöneticisi istatistikleri.
+
+**Dikkat edilmesi gereken üç nokta:**
+
 - **Analiz asenkron.** `POST /api/reports/upload` hemen `status: "pending"`
-  ile dönüyor; analiz arka planda çalışıyor (gerçek PDF'lerde birkaç saniye).
-  Arayüzün `status != "pending"` olana kadar yoklaması (polling) lazım —
-  yükleme sonrası tek istek atıp analiz beklemek boş sonuç verir.
+  döner; analiz arka planda çalışır (gerçek PDF'te ~2 sn). `pollUntilAnalyzed`
+  bunu hallediyor — yükleme sonrası tek istek atmak boş sonuç verir.
+- **`generateStaticParams` kaldırıldı.** Rapor detay sayfası MOCK_REPORTS
+  kimliklerinden statik üretiliyordu, yani gerçek bir `RPT-2026-XXXXXX`
+  kimliğiyle açıldığında 404 veriyordu. Artık dinamik. JWT localStorage'da
+  durduğu için veri çekme **istemcide** olmak zorunda — sunucu bileşeni
+  token'a erişemez.
+- **CORS.** Backend yalnızca `http://localhost:3000`'e izin veriyor
+  (`backend/main.py`). Frontend'i başka bir porttan servis ederseniz orayı da
+  güncelleyin. Doğrulandı: `Authorization` başlığı için preflight geçiyor,
+  yabancı origin 400 alıyor.
 
-**Dil konusu kapandı:** senin arayüzü Türkçe'ye çevirmenle
-(`c348853`) tutarsızlık bitti, tüm AI çıktıları da Türkçe.
+**Dil konusu kapandı:** senin arayüzü Türkçe'ye çevirmenle (`c348853`)
+tutarsızlık bitti, tüm AI çıktıları da Türkçe.
+
+### Hâlâ açık olan (senin kararın)
+
+- `criteria-template-form.tsx` (Yarışma Yöneticisi'nin kriter tanımlama
+  formu) hâlâ hiçbir yere kaydetmiyor — backend'de o şekle karşılık gelen bir
+  uç nokta yok (`POST /api/criteria` farklı bir şema bekliyor: tek kriter,
+  `category_id`+`title`+`max_score`). Bu MVP maddesi değil, o yüzden
+  dokunmadım.
+- Yarışmacının **kendi** raporunu yükleyebileceği bir ekran yok; yükleme
+  yalnızca Yarışma Yöneticisi panelinde. Backend her iki role de izin
+  veriyor (`RoleChecker(["COMPETITION_MANAGER", "COMPETITOR"])`).
 
 ## Kurulum ve test (herkes için)
 
@@ -170,10 +195,27 @@ python ai-scoring/tests/test_scorer.py
 pip install -r backend/requirements.txt
 cd backend && python -m pytest tests/ -v
 
-# frontend (Mahmut)                -> 74 test
+# frontend (Mahmut)                -> 87 test
 cd frontend && npm install && npm test
-cd frontend && npm run dev
 ```
+
+**Sistemi çalıştırmak (iki terminal gerekiyor):**
+
+```bash
+# 1. terminal — backend
+cd backend
+cp .env.local.example .env 2>/dev/null || true
+python -c "import secrets; print(secrets.token_hex(32))"   # cikan degeri .env'e JWT_SECRET_KEY olarak yaz
+python -m uvicorn main:app --reload --port 8000
+
+# 2. terminal — frontend
+cd frontend
+cp .env.local.example .env.local          # NEXT_PUBLIC_API_URL=http://localhost:8000
+npm run dev                                # http://localhost:3000
+```
+
+Frontend **3000** portunda çalışmalı: backend CORS'ta yalnızca
+`http://localhost:3000` adresine izin veriyor.
 
 **Backend'i gerçekten çalıştırmak için** `JWT_SECRET_KEY` ayarlanmalı, yoksa
 public repoda duran güvensiz bir varsayılana düşer ve uyarı basar:
@@ -195,9 +237,10 @@ Seed kullanıcıları (ilk açılışta oluşur): `manager@`, `referee@`,
 | `ai-doc-analysis` | 32 başarılı, 0 başarısız |
 | `ai-scoring` | 76 başarılı, 0 başarısız |
 | `backend` (pytest) | 9 başarılı, 0 başarısız |
-| `frontend` (jest) | 74 başarılı, 0 başarısız |
+| `frontend` (jest) | 87 başarılı, 0 başarısız |
 | `frontend` (next build) | başarılı |
-| Uçtan uca (canlı sunucu + gerçek KTR PDF'leri) | 40 başarılı, 0 başarısız |
+| Uçtan uca — API akışı | 40 başarılı, 0 başarısız |
+| Uçtan uca — arayüz istek şekilleri (canlı backend) | 32 başarılı, 0 başarısız |
 
 Uçtan uca testte doğrulananlar: 4 rolün girişi, gerçek PDF yükleme, dört
 analizin veri tabanına yazılması, hakemin AI önerisini ezip nihai karar
@@ -205,3 +248,10 @@ vermesi, rol bazlı yetkilendirme (yarışmacı karar veremiyor, kendi raporunda
 başkasını göremiyor), ve saldırgan vakalar: birebir kopyalanmış rapor %100
 örtüşmeyle "Yüksek risk", yanlış kategori beyanı 10 puanla "Kritik", bozuk
 dosya sistemi çökertmiyor.
+
+İkinci uçtan uca test, arayüzün **ürettiği istek şekillerini** canlı
+backend'e karşı doğruluyor. Bu ayrı bir test çünkü jest testleri `fetch`'i
+taklit ediyor — yani arayüz kodunun şeklini sınar, backend'in o şekli kabul
+edip etmediğini değil. Doğrulananlar: form-encoded giriş (`username` alan
+adıyla), multipart yükleme, JSON karar gövdesi, CORS preflight, ve
+`GET /api/reports`'un analiz edilmiş rapor varken artık 500 vermemesi.
