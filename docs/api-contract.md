@@ -106,30 +106,117 @@ akışı (doğru puanlar veritabanına yazılıp API'den döndü). Hayrettin'in
 mock fonksiyonları (`evaluate_criteria`, `analyze_category_fit`,
 `check_similarity`) henüz değiştirilmedi, o hâlâ kendi kısmını yazacak.
 
-**Ayrıca dikkat:** O repodaki tüm UI metinleri (özet/bulgu cümleleri, etiketler)
-**İngilizce** yazılmış, benim ürettiğim özet/bulgular ise **Türkçe**. Bu, ekip
-içinde netleştirilmesi gereken ayrı bir karar (hakem/yarışmacı kitlesi Türkçe
-konuştuğu için Türkçe daha mantıklı görünüyor, ama UI zaten İngilizce metin
-üzerine kurulmuş) — henüz kimse karar vermedi.
+**~~Ayrıca dikkat:~~ Dil konusu kapandı (2026-08-24).** Bu bölümde daha önce
+"o repodaki tüm UI metinleri İngilizce" yazıyordu; artık geçerli değil —
+frontend `c348853` commit'i ile tamamen Türkçe'ye çevrildi
+(`frontend/src/lib/ai-analysis.ts` etiketleri, `DECISION_LABELS`, tüm panel
+metinleri). Dolayısıyla **karar Türkçe**: AI modüllerinin ürettiği tüm
+özet/bulgu/gerekçe metinleri Türkçe olmalı. `ai-scoring` bu karara uyuyor.
+
+Geriye kalan tek tutarsızlık backend tarafında: `backend/main.py`
+`seed_db()` kategori adlarını İngilizce seed ediyor (`"Robotics &
+Automation"`), frontend ise Türkçe adlar kullanıyor
+(`criteria-template.ts` → `"Robotik ve Otomasyon"`). `ai-scoring` her iki
+yazımı da tanıyor (`docs/scoring-rules.json` → `turkce_ad`), ama seed
+verisinin Türkçeleştirilmesi Mustafa'nın kararı olarak duruyor.
 
 ## 2. Kategori / Benzerlik / Kriter Değerlendirme (Hayrettin — `ai-scoring`)
 
-> Henüz Hayrettin ile netleşmedi — placeholder.
+### ✅ Yazıldı ve backend'e entegre edildi (2026-08-24)
+
+Modül `ai-scoring/` altında; detaylı tasarım gerekçeleri ve ölçüm sonuçları
+için [`ai-scoring/README.md`](../ai-scoring/README.md).
+
+**Backend'in çağırdığı giriş noktaları** (`backend/app/services/ai.py`
+içindeki üç mock fonksiyonun yerine geçti — o dosyada artık mock yok):
+
+```python
+analyze_category_fit_for_ui(pdf_path, categories, declared_category_id=None)
+    -> {"score": int, "summary": str, "findings": [str]}
+
+check_similarity_for_ui(pdf_path, existing_paths)
+    -> {"score": int, "summary": str, "findings": [str]}
+
+evaluate_criteria_for_ui(pdf_path, criteria_list=None)
+    -> {"suggested_score": int, "suggested_outcome": str, "rationale": str,
+        "kriter_puanlari": [...], "guclu_yonler": [...], "gelisim_onerileri": [...],
+        "motor": "llm" | "kural"}
+```
+
+`suggested_outcome` her zaman `approve` | `revise` | `reject` — frontend
+`DECISION_LABELS` anahtarları bunlar, başka bir değer arayüzde `undefined`
+gösterir.
+
+**Yapılandırılmış sözleşme** (`score_report()` — bu bölümün orijinal
+taslağıyla uyumlu, üzerine alanlar eklendi):
 
 ```json
 {
-  "kategori_onerisi": "string",
-  "kategori_guven_skoru": 0.0,
+  "kategori_onerisi": "AI & Machine Learning",
+  "kategori_guven_skoru": 1.0,
+  "beyan_edilen_kategori": "AI & Machine Learning",
+  "beyan_edilen_kategori_puani": 100,
   "en_benzer_raporlar": [
-    { "rapor_id": "string", "benzerlik_yuzdesi": 0.0 }
+    { "rapor_id": "RPT-2026-3210C8.pdf", "benzerlik_yuzdesi": 2.4, "konusal_benzerlik": 20.79 }
   ],
+  "benzerlik_puani": 2,
   "kriter_puanlari": [
-    { "kriter": "string", "puan": 0, "gerekce": "string" }
+    { "kriter": "Özgünlük", "puan": 90, "agirlik": 25, "gerekce": "Ölçülen: ..." }
   ],
-  "guclu_yonler": ["string"],
-  "gelisim_onerileri": ["string"]
+  "toplam_puan": 94,
+  "onerilen_sonuc": "approve",
+  "guclu_yonler": ["..."],
+  "gelisim_onerileri": ["..."],
+  "degerlendirme_motoru": "kural",
+  "hatalar": []
 }
 ```
+
+### ⚠️ Dikkat edilmesi gereken üç nokta
+
+**1. `similarity` ters polarite — DÜŞÜK puan İYİ sonuç.**
+`frontend/src/lib/ai-analysis.ts` içinde `similarity` tek `polarity:
+"negative"` kontrolü ve **kendi bantları var**: `≤15` "Özgün", `16-35`
+"Gözden geçirilmeli", `>35` "Yüksek risk". Bu dosyanın Bölüm 1'inde yazan
+"≥85 / 65-84 / <65" bandı yalnızca diğer **üç pozitif** kontrol için geçerli.
+`check_similarity` bir **örtüşme yüzdesi** döndürür (0 = temiz, 100 = tam
+kopya), kalite/güven puanı değil.
+
+**2. Benzerlik puanı TF-IDF'ten değil birebir örtüşmeden geliyor.**
+Ölçtük: birbirinden bağımsız 34 gerçek raporun TF-IDF kosinüs benzerliği
+%11.9–45.2 (medyan %20.1), çünkü hepsi aynı şablonu kullanıyor. Kosinüs
+intihal puanı olsaydı gerçek raporların bir kısmı `>35` "Yüksek risk"
+bandında haksız yere suçlanacaktı. Aynı raporların 8 kelimelik birebir
+örtüşmesi %0–7.9 (medyan %0.6). Ayrıntı: `ai-scoring/similarity.py` başındaki
+not.
+
+**3. Kriter kırılımı için veri tabanı kolonu yok.**
+`evaluate_criteria` kriter bazlı puanları, `guclu_yonler` ve
+`gelisim_onerileri` alanlarını döndürüyor, ama `models.AiAnalysis`'te bunlara
+karşılık gelen kolon yok — dolayısıyla veri tabanına yazılmıyorlar. Bilgi
+kaybolmasın diye kriter kırılımı `rationale` metninin içine gömülü geliyor
+(arayüzde `rationale`'ın uzunluk sınırı yok). Kalıcı çözüm için `AiAnalysis`'e
+kolon/tablo eklenmesi gerekir — **Mustafa'nın kararı**, tek taraflı şema
+değişikliği yapılmadı. Frontend'de de kriter kırılımını gösteren bileşen yok;
+`guclu_yonler`/`gelisim_onerileri` için doğal yer
+`frontend/src/lib/competitor-feedback.ts` içindeki `strengths`/`improvements`
+alanları (şu an hardcoded mock).
+
+### Ek: backend'e geçirilen yeni parametre
+
+`run_full_analysis` artık `declared_category_id` de alıyor ve
+`backend/app/routes/reports.py` bunu `report.category_id`'den geçiriyor.
+Bu olmadan kategori kontrolü yalnızca "en uygun kategori hangisi"
+diyebiliyordu; asıl sorulması gereken soru "rapor **beyan edilen**
+kategoriye ait mi". Parametre opsiyonel, eski dört argümanlı çağrı şekli
+çalışmaya devam ediyor.
+
+### Kural kaynağı
+
+`ai-scoring`'in tüm eşikleri ve anahtar kelime listeleri
+[`docs/scoring-rules.json`](scoring-rules.json) içinde. Sayılar tahmin değil:
+34 gerçek finalist raporu ölçülerek türetildi (`python ai-scoring/calibrate.py`),
+her eşiğin kaynağı dosyadaki `_kaynak` notlarında yazılı.
 
 ### Referans rubrik (Havacılıkta YZ / KTR, 2022 — puanlama örneği için)
 
