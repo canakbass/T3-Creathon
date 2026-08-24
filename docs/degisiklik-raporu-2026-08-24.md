@@ -193,22 +193,101 @@ mantığı iki yerde yaşamasın diye (`check_content` bölüm uzunluğu için,
 Hasan'ın 32 testi bu değişiklikten sonra da geçiyor — davranış birebir aynı,
 sadece ortak parça ayrı fonksiyona alındı.
 
-## 6. Sıradaki işler
+## 6. İkinci tur (aynı gün): frontend bağlandı, MVP tamamlandı
 
-**Öncelik 1 — Mahmut: frontend'i backend'e bağla.** MVP madde 6'nın
-kapanması buna bağlı. Arayüz şu an hiçbir HTTP isteği atmıyor, tüm veri
-yerel mock. Dikkat edilecek iki şey `README.md`'de yazılı (alan adı/şekil
-uyuşmazlığı ve analizin asenkron olması — arayüzün `status != "pending"`
-olana kadar yoklaması lazım).
+İlk tur bittiğinde tek açık madde MVP 6'ydı (arayüz backend'e bağlı
+değildi). Aynı gün içinde o da kapatıldı.
 
-**Öncelik 2 — Mustafa:** `models.AiAnalysis`'e kriter kırılımı için kolon.
-Şimdilik `rationale` metnine gömülü geliyor. Ayrıca `seed_db()` kategori
-adları İngilizce, frontend Türkçe kullanıyor — seed verisinin
-Türkçeleştirilmesi senin kararın.
+### 6.1. SonarQube bulguları
 
-**Öncelik 3 — Hayrettin (ben):** API anahtarı gelince LLM motorunu gerçek
-çağrıyla doğrulamak. Ayrıca benzerlik şu an yalnızca sistemdeki diğer
-raporlara bakıyor; kamuya açık kaynaklara karşı intihal kontrolü yok (hakem
-paneli metinleri bu yüzden "önceki başvurularla" diyor, "internetle"
-demiyor) — Demo Day'de jüri sorarsa bu sınırın bilinçli ve açıkça
-belirtilmiş olduğu söylenebilir.
+**`open()` async fonksiyonda.** `upload_report` `async def` ama dosyayı
+senkron yazıyordu; bloklayan sistem çağrıları olay döngüsünün kendi iş
+parçacığında çalışıyordu, yani büyük bir PDF yazılırken sunucu **başka
+hiçbir isteğe yanıt veremiyordu**. `anyio.to_thread.run_sync` +
+`shutil.copyfileobj` ile düzeltildi (dosya artık belleğe de sığmak zorunda
+değil). anyio yeni bağımlılık değil — starlette zaten ona bağlı.
+
+**Regex geri izleme.** Hangi desenin sorunlu olduğunu ölçtük: girdi 50
+binden 800 bine ikiye katlanarak büyütüldü. `KAYNAK_DESENLERI` tamamen
+lineer çıktı (16× girdi → 17× süre). `SAYI_DESENI` 800 bin karakterde
+4.32× büyüme gösterdi — Sonar haklı. Ama **ölçek önemli**: bilinen gerçek
+bir ReDoS deseni olan `(a+)+$` sadece **26 karakterde 4 saniye** alırken
+bizim desen 800.000 karakterde 36 ms. Risk gerçek ama sömürülebilir
+değildi. Yine de sınırlandırıldı (`{0,8}`), çünkü girdi kullanıcının
+yüklediği PDF'ten geliyor. **Anlam değişmedi:** 34 raporun tam metninde ve
+203 bölümünde eşleşme listeleri birebir aynı (7874 eşleşme) — bu şarttı,
+çünkü `beklenen_kanit_yogunlugu` eşikleri eski desenle ölçülmüştü.
+
+### 6.2. Frontend backend'e bağlandı
+
+`frontend/src/lib/api/` altında bir API katmanı kuruldu (istemci, tel
+tipleri, eşleyiciler, hata çevirisi, yoklama). Bağlanan ekranlar: gerçek
+JWT girişi, hakem panosu, rapor detayı, nihai karar, rapor yükleme,
+yarışmacı sonuç paneli, değerlendirme yöneticisi istatistikleri.
+
+Kaldırılan sahtelikler:
+- Giriş: rol kartına tıklamak `setRole()` çağırıyordu — **şifresiz giriş**.
+  Artık gerçek `/api/auth/login`.
+- Yükleme: `setInterval` ile ilerleme çubuğu dolduran simülasyon; dosya
+  hiçbir yere gitmiyordu. Backend'in zorunlu tuttuğu `project_name` ve
+  `category_id` alanları arayüzde **hiç yoktu**.
+- Rapor detayı: `generateStaticParams` MOCK_REPORTS kimliklerinden statik
+  üretiyordu, gerçek bir `RPT-2026-XXXXXX` kimliğiyle **404** dönüyordu.
+- Hakem kararı: geri çağrım senkron çağrılıyor ve başarı bandı ondan ÖNCE
+  kuruluyordu — kayıt başarısız olsa bile hakem kararının kaydedildiğini
+  sanıyordu.
+
+Gizlilik sınırı korundu ve güçlendirildi: yarışmacıya benzerlik/intihal
+bulguları ve AI'nın önerdiği puan **gösterilmiyor**; karar verilmemiş
+raporlar hiç gösterilmiyor. 7 test bunu kilitliyor.
+
+### 6.3. LLM: Gemini eklendi, varsayılan olarak KAPALI
+
+Takımın Claude API'si yok. Google Gemini sağlayıcısı eklendi (SDK şekli
+tahmin edilmedi, kurulu `google-genai` incelenip sahte anahtarla
+doğrulandı). Ama daha önemlisi: **LLM artık varsayılan olarak kapalı.**
+
+Sebep doğrulanmış bir gizlilik çatışması. Şartname "erişilen T3 Vakfı
+verileri üçüncü taraflarla paylaşılamaz" diyor. Google'ın resmi koşulları
+ücretsiz katman için: gönderilen içerik ürün geliştirmede kullanılıyor,
+insan inceleyiciler okuyabiliyor, ve açıkça *"Do not submit sensitive,
+confidential, or personal information to the Unpaid Services."*
+AEA/İsviçre/BK kullanıcıları ücretsizde de ücretli korumaları alıyor —
+Türkiye değil.
+
+Yerel kural motoru bu sorunu tamamen ortadan kaldırıyor. Bu bir eksiklik
+değil, **Demo Day'de anlatılmaya değer bir avantaj**.
+
+### 6.4. Güncel test durumu
+
+| Paket | Sonuç |
+|---|---|
+| `ai-doc-analysis` | 32 ✅ |
+| `ai-scoring` | 88 ✅ |
+| `backend` | 9 ✅ |
+| `frontend` (jest) | 87 ✅ |
+| Uçtan uca — API akışı | 40 ✅ |
+| Uçtan uca — arayüz istek şekilleri (canlı backend) | 32 ✅ |
+
+İkinci uçtan uca test ayrı yazıldı çünkü jest testleri `fetch`'i taklit
+ediyor — yani arayüz kodunun şeklini sınar, backend'in o şekli **kabul
+edip etmediğini** değil. CORS preflight'ın `Authorization` başlığı için
+geçtiği ve yabancı origin'in reddedildiği de doğrulandı.
+
+## 7. Sıradaki işler
+
+**Mustafa:** `models.AiAnalysis`'e kriter kırılımı için kolon. Şimdilik
+`rationale` metnine gömülü geliyor. Ayrıca `seed_db()` kategori adları
+İngilizce, frontend Türkçe kullanıyor.
+
+**Mahmut:** İki ekran hâlâ karşılıksız — Yarışma Yöneticisi'nin kriter
+tanımlama formu (backend'de o şekle karşılık gelen uç nokta yok) ve
+yarışmacının kendi raporunu yükleyebileceği ekran (backend izin veriyor,
+arayüz yok). İkisi de MVP maddesi değil.
+
+**Hayrettin (ben):** Gemini gerçek bir anahtarla henüz denenmedi (ortamda
+anahtar yok) — çağrı şekli doğrulandı ama uçtan uca bir çağrı yapılmadı.
+Ayrıca benzerlik yalnızca sistemdeki diğer raporlara bakıyor; kamuya açık
+kaynaklara karşı intihal kontrolü yok. Hakem paneli metinleri bu yüzden
+"önceki başvurularla" diyor, "internetle" demiyor — jüri sorarsa bu sınır
+bilinçli ve açıkça belirtilmiş.
