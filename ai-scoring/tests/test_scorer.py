@@ -549,5 +549,139 @@ print(
 )
 print("-" * 78)
 
+# ---------------------------------------------------------------------------
+print()
+print("=" * 78)
+print("8. LLM SAGLAYICI SECIMI VE GIZLILIK KAPISI")
+print("=" * 78)
+
+import importlib  # noqa: E402
+import os  # noqa: E402
+
+import llm as llm_modulu  # noqa: E402
+
+_LLM_ENV = (
+    "AI_SCORING_LLM",
+    "AI_SCORING_LLM_ONAY",
+    "AI_SCORING_MODEL",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "ANTHROPIC_API_KEY",
+)
+_kaydedilen = {k: os.environ.get(k) for k in _LLM_ENV}
+
+
+def _llm_ortami(**env):
+    """Ilgili ortam degiskenlerini sifirlayip verilenleri kurar."""
+    for k in _LLM_ENV:
+        os.environ.pop(k, None)
+    os.environ.update(env)
+    importlib.reload(llm_modulu)
+    return llm_modulu
+
+
+try:
+    m = _llm_ortami()
+    kullanilabilir, aciklama = m.saglayici_durumu()
+    check(
+        "VARSAYILAN motor kural tabanli - hicbir veri disari cikmiyor",
+        kullanilabilir is False and m.secili_saglayici() == "kural",
+        aciklama,
+    )
+
+    # Anahtar ortamda duruyor diye rapor metni kendiliginden disari
+    # gonderilmemeli; bu bilincli bir karar olmali.
+    m = _llm_ortami(GOOGLE_API_KEY="sahte", ANTHROPIC_API_KEY="sahte")
+    check(
+        "ortamda anahtar VARSA BILE LLM kendiliginden acilmiyor",
+        m.saglayici_durumu()[0] is False,
+        m.saglayici_durumu()[1],
+    )
+
+    m = _llm_ortami(AI_SCORING_LLM="gemini")
+    check(
+        "gemini secili ama anahtar yoksa kullanilamaz deniyor",
+        m.saglayici_durumu()[0] is False and "API_KEY" in m.saglayici_durumu()[1],
+        m.saglayici_durumu()[1],
+    )
+
+    m = _llm_ortami(AI_SCORING_LLM="gemini", GOOGLE_API_KEY="sahte")
+    kullanilabilir, aciklama = m.saglayici_durumu()
+    check(
+        "GIZLILIK KAPISI: ucretsiz Gemini icin acik onay sart",
+        kullanilabilir is False and "ONAY" in aciklama,
+        aciklama[:90],
+    )
+    check(
+        "onay uyarisi nedenini acikliyor (Google icerigi urun gelistirmede kullaniyor)",
+        "gelistirmek" in aciklama and "sartnamesi" in aciklama,
+    )
+
+    m = _llm_ortami(
+        AI_SCORING_LLM="gemini", GOOGLE_API_KEY="sahte", AI_SCORING_LLM_ONAY="evet"
+    )
+    check(
+        "acik onay verilince gemini kullanilabilir oluyor",
+        m.saglayici_durumu()[0] is True,
+        m.saglayici_durumu()[1],
+    )
+    check(
+        "model adi ortam degiskeniyle degistirilebiliyor",
+        _llm_ortami(
+            AI_SCORING_LLM="gemini",
+            GOOGLE_API_KEY="sahte",
+            AI_SCORING_LLM_ONAY="evet",
+            AI_SCORING_MODEL="gemini-3.5-flash",
+        ).saglayici_durumu()[1].endswith("(gemini-3.5-flash)"),
+    )
+
+    # Gemini'nin response_schema'si JSON Schema'nin tamamini desteklemiyor.
+    temiz = llm_modulu._gemini_semasini_temizle(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"a": {"type": "string", "additionalProperties": False}},
+        }
+    )
+    check(
+        "gemini sema temizligi additionalProperties'i ozyinelemeli kaldiriyor",
+        "additionalProperties" not in temiz
+        and "additionalProperties" not in temiz["properties"]["a"],
+        str(temiz),
+    )
+    check(
+        "sema temizligi anlami bozmuyor (type/properties duruyor)",
+        temiz["type"] == "object" and temiz["properties"]["a"]["type"] == "string",
+    )
+
+    # LLM istendi ama kullanilamiyorsa: cokmemeli, kural motoruna dusmeli
+    # ve NEDENINI hakeme soylemeli.
+    _llm_ortami(AI_SCORING_LLM="gemini")  # anahtar yok
+    import criteria as criteria_modulu  # noqa: E402
+
+    importlib.reload(criteria_modulu)
+    sonuc_llm = criteria_modulu.evaluate_criteria(ORNEK, None, RULES, SCORING, motor="llm")
+    check(
+        "LLM kullanilamazken kural motoruna dusuluyor, cokmuyor",
+        sonuc_llm.get("motor") == "kural",
+        str(sonuc_llm.get("motor")),
+    )
+    check(
+        "dusulme nedeni uyarilarda aciga cikariliyor",
+        any("kullanılamıyor" in u for u in sonuc_llm.get("uyarilar", [])),
+        str(sonuc_llm.get("uyarilar")),
+    )
+    check(
+        "gerekce metni hangi motorun kullanildigini soyluyor",
+        "kural tabanlı" in sonuc_llm["gerekce"],
+    )
+finally:
+    # Ortami eski haline dondur, sonraki testleri etkilemesin.
+    for k, v in _kaydedilen.items():
+        os.environ.pop(k, None)
+        if v is not None:
+            os.environ[k] = v
+    importlib.reload(llm_modulu)
+
 print(f"\n{passed} basarili, {failed} basarisiz")
 sys.exit(1 if failed else 0)

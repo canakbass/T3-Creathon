@@ -158,31 +158,72 @@ puanların gerçekten dağıldığını doğrulayan kontrollerde.
 
 ---
 
-## İki motor: Claude API + kural tabanlı yedek
+## İki motor: yerel kural motoru (varsayılan) + isteğe bağlı LLM
 
-`ANTHROPIC_API_KEY` tanımlıysa kriter değerlendirmesi Claude API ile,
-tanımlı değilse (ya da API hata verirse) **deterministik kural motoruyla**
-yapılır. Hangi motorun kullanıldığı hakeme gösterilen gerekçe metninde
-yazılı.
+Kriter değerlendirmesi **varsayılan olarak tamamen yerel** çalışır. LLM
+yalnızca `AI_SCORING_LLM` ortam değişkeniyle açıkça açılırsa devreye girer.
+Hangi motorun kullanıldığı hakeme gösterilen gerekçe metninde yazılı.
 
-Neden iki motor: Demo Day'de internet kesilse, kredi bitse veya API geçici
-hata verse **sistem çalışmaya devam etmeli**. Tek motorlu bir tasarımda MVP
-madde 5 jüri önünde çökebilir. Ayrıca yedek motor deterministik olduğu için
-aynı rapor her analizde aynı puanı alıyor.
+```bash
+# Varsayılan — hiçbir veri dışarı çıkmaz
+python ai-scoring/scorer.py rapor.pdf
+
+# Claude API
+AI_SCORING_LLM=claude ANTHROPIC_API_KEY=... python ai-scoring/scorer.py rapor.pdf
+
+# Google Gemini (aşağıdaki gizlilik uyarısını okuyun)
+AI_SCORING_LLM=gemini GOOGLE_API_KEY=... AI_SCORING_LLM_ONAY=evet \
+  python ai-scoring/scorer.py rapor.pdf
+```
+
+Model `AI_SCORING_MODEL` ile değiştirilebilir (varsayılanlar:
+`claude-opus-5`, `gemini-2.5-flash`).
+
+### ⚠️ Gizlilik: LLM açmadan önce okuyun
+
+LLM kullanmak, rapor **metnini üçüncü taraf bir sunucuya göndermek**
+demektir. Creathon şartnamesi iki şey söylüyor (bkz. `docs/CLAUDE.md`):
+*"Program süresince erişilen T3 Vakfı verileri üçüncü taraflarla
+paylaşılamaz"* ve çözümün KVKK'ya uygun olması.
+
+Google Gemini'nin **ücretsiz** katmanı bununla çelişiyor
+([resmi koşullar](https://ai.google.dev/gemini-api/terms)):
+
+> "Google uses the content you submit to the Services and any generated
+> responses to provide, improve, and develop Google products" · "human
+> reviewers may read, annotate, and process your API input and output" ·
+> **"Do not submit sensitive, confidential, or personal information to the
+> Unpaid Services."**
+
+Ücretli katmanda bunların hiçbiri geçerli değil. AEA/İsviçre/Birleşik
+Krallık kullanıcıları ücretsiz katmanda da ücretli korumaları alıyor —
+**Türkiye bu listede değil.**
+
+Bu yüzden ücretsiz Gemini için `AI_SCORING_LLM_ONAY=evet` şart koşuluyor:
+kimse bunu farkında olmadan açmasın diye. **Yerel kural motoru bu sorunu
+tamamen ortadan kaldırıyor — bu bir eksiklik değil, bu proje için bir
+avantaj ve Demo Day'de anlatılmaya değer.**
+
+### Neden yerel motor varsayılan
+
+- **Gizlilik.** Yukarıdaki madde.
+- **Dayanıklılık.** Demo Day'de internet kesilse, kredi bitse veya API
+  geçici hata verse sistem çalışmaya devam etmeli. Tek motorlu bir
+  tasarımda MVP madde 5 jüri önünde çökebilir.
+- **Tekrarlanabilirlik.** Kural motoru deterministik: aynı rapor her zaman
+  aynı puanı alır. Bir değerlendirme sisteminde bu önemli bir özellik.
 
 **Her iki motorda da toplam puanı kod hesaplıyor.** LLM sadece her bölümün
 kalitesine 0–100 puan verir; ağırlıklı toplama her zaman kodda yapılır.
 Sebep: dil modelleri aritmetikte tutarsız olabilir, ve hakem *"bu 78 nereden
 geldi"* diye sorduğunda cevabın kodda ve config'de olması gerekir.
 
-Model `AI_SCORING_MODEL` ortam değişkeniyle değiştirilebilir (varsayılan
-`claude-opus-5`).
-
 ## Bağımlılıklar ve zarif bozulma
 
 | Eksikse | Ne olur |
 |---|---|
-| `anthropic` yok / API key yok | Kriter değerlendirmesi kural motoruna düşer, gerekçede belirtilir |
+| `AI_SCORING_LLM` ayarlanmamış | Kural motoru çalışır (varsayılan ve tercih edilen durum) |
+| SDK yok / API key yok / kota bitti | Kriter değerlendirmesi kural motoruna düşer, **nedeni** gerekçede belirtilir |
 | `scikit-learn` yok | Konusal benzerlik ve karakter n-gram yedeği atlanır; **benzerlik puanı etkilenmez** (saf Python) |
 | PDF okunamıyor | Puan 0 döner, ama özet/bulgular bunun bir **analiz hatası** olduğunu, kalite değerlendirmesi olmadığını söyler |
 | Karşılaştırılacak rapor yok | Benzerlik 0 döner, bulgularda bunun "özgünlük kanıtlandı" anlamına **gelmediği** yazılır |

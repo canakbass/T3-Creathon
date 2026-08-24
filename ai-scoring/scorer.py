@@ -33,6 +33,7 @@ from criteria import (  # noqa: E402
     evaluate_criteria,
     evaluate_criteria_for_ui,
     llm_available,
+    saglayici_durumu,
 )
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "evaluate_criteria_for_ui",
     "score_report",
     "llm_available",
+    "saglayici_durumu",
     "load_rules",
     "load_scoring_rules",
 ]
@@ -113,6 +115,7 @@ if __name__ == "__main__":
         for i, ad in enumerate(load_scoring_rules()["kategori"]["anahtar_kelimeler"], 1)
     ]
 
-    print(f"Kriter motoru: {'Claude API kullanilabilir' if llm_available() else 'kural tabanli'}\n")
+    _kullanilabilir, _aciklama = saglayici_durumu()
+    print(f"Kriter motoru: {_aciklama}\n")
     sonuc = score_report(hedef, categories=ornek_kategoriler, existing_paths=digerleri)
     print(json.dumps(sonuc, ensure_ascii=False, indent=2))

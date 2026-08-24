@@ -11,7 +11,17 @@ langdetect
 # yedegini uretiyor; yoksa o iki sinyal sessizce atlaniyor.
 scikit-learn
 
-# Kriter degerlendirmesinde Claude API motoru icin. ZORUNLU DEGIL:
-# kurulu degilse (ya da ANTHROPIC_API_KEY yoksa) modul deterministik
-# kural motoruna duser ve bunu hakem gerekcesinde acikca belirtir.
+# --- LLM saglayicilari: IKISI DE ZORUNLU DEGIL ---
+#
+# Varsayilan motor tamamen YEREL calisan kural motorudur; hicbir veri
+# disari cikmaz. LLM yalnizca AI_SCORING_LLM ortam degiskeniyle ACIKCA
+# acilirsa devreye girer (bkz. ai-scoring/llm.py basindaki gizlilik
+# uyarisi - Creathon sartnamesi verilerin ucuncu taraflarla
+# paylasilmamasini sart kosuyor).
+#
+# Claude API icin:   AI_SCORING_LLM=claude + ANTHROPIC_API_KEY
 # anthropic
+#
+# Google Gemini icin: AI_SCORING_LLM=gemini + GOOGLE_API_KEY
+#                     + AI_SCORING_LLM_ONAY=evet
+# google-genai

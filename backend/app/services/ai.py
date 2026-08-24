@@ -22,6 +22,7 @@ from scorer import (  # noqa: E402
     check_similarity_for_ui as _hayrettin_similarity,
     evaluate_criteria_for_ui as _hayrettin_criteria,
     llm_available,
+    saglayici_durumu,
     load_rules,
     load_scoring_rules,
 )
@@ -155,7 +156,9 @@ def engine_info() -> Dict[str, Any]:
     calisiyor" sorusunu tek cagriyla yanitlamak icin. Hakem panelinde
     gosterilmiyor; gerekce metni bu bilgiyi zaten iceriyor.
     """
+    kullanilabilir, aciklama = saglayici_durumu()
     return {
-        "kriter_motoru": "claude-api" if llm_available() else "kural-tabanli",
-        "anthropic_sdk_kurulu": llm_available(),
+        "kriter_motoru": "llm" if kullanilabilir else "kural-tabanli",
+        "saglayici": aciklama,
+        "llm_kullanilabilir": kullanilabilir,
     }

@@ -2,16 +2,25 @@
 
 IKI MOTOR VAR:
 
-  1. "llm"   - ANTHROPIC_API_KEY tanimliysa Claude API ile rubrik tabanli
-               degerlendirme. Bolum metinlerini ve rubrigi gonderip her
-               kriter icin puan + gerekce istiyoruz.
-  2. "kural" - anahtar yoksa (ya da API cagrisi basarisiz olursa)
-               olculebilir sinyallere dayali deterministik degerlendirme.
+  1. "kural" - VARSAYILAN. Olculebilir sinyallere dayali deterministik
+               degerlendirme. Tamamen YEREL calisir; hicbir veri disari
+               cikmaz.
+  2. "llm"   - AI_SCORING_LLM=claude ya da =gemini ile ACIKCA acilirsa
+               devreye girer. Bolum metinlerini ve rubrigi gonderip her
+               kriter icin puan + gerekce istiyoruz. Saglayici ayrintilari
+               llm.py'de.
 
-NEDEN IKI MOTOR: Demo Day'de internet kesilse, kredi bitse ya da API
-gecici hata verse sistem CALISMAYA DEVAM ETMELI. Tek motorlu bir tasarimda
-MVP madde 5 juri onunde comebilir. Ayrica yedek motor deterministik oldugu
-icin testlerde ayni girdi her zaman ayni cikti veriyor.
+NEDEN VARSAYILAN KURAL MOTORU (sadece bir yedek degil):
+  * Gizlilik. LLM kullanmak rapor METNINI ucuncu tarafa gondermek demek.
+    Creathon sartnamesi "erisilen T3 Vakfi verileri ucuncu taraflarla
+    paylasilamaz" diyor ve KVKK uyumu sart kosuyor. Yerel motor bu sorunu
+    tamamen ortadan kaldiriyor - bu bir eksiklik degil, AVANTAJ.
+    Ayrintili uyari icin llm.py basina bakin.
+  * Dayaniklilik. Demo Day'de internet kesilse, kredi bitse ya da API
+    gecici hata verse sistem CALISMAYA DEVAM ETMELI. Tek motorlu bir
+    tasarimda MVP madde 5 juri onunde comebilir.
+  * Tekrarlanabilirlik. Kural motoru deterministik: ayni rapor her zaman
+    ayni puani alir. Bir degerlendirme sisteminde bu onemli bir ozellik.
 
 ONEMLI - IS BOLUMU: LLM motoru bile TOPLAM PUANI HESAPLAMIYOR. LLM sadece
 her bolumun kalitesine 0-100 arasi puan verir; agirlikli toplama her zaman
@@ -39,15 +48,14 @@ from text_utils import (  # noqa: E402
     normalize_for_matching,
     read_report,
 )
+from llm import degerlendir, llm_available, saglayici_durumu  # noqa: E402,F401
 
 DEFAULT_SCORING_RULES_PATH = (
     Path(__file__).resolve().parent.parent / "docs" / "scoring-rules.json"
 )
 
-# Claude API varsayilanlari. Model, ortam degiskeniyle degistirilebilir ki
-# kredi/hiz dengesini kod degistirmeden ayarlayabilelim.
-LLM_MODEL = os.environ.get("AI_SCORING_MODEL", "claude-opus-5")
-LLM_MAX_TOKENS = 16000
+# LLM saglayici secimi, model adlari ve tum API ayrintilari llm.py'de.
+# Bu dosya yalnizca "hangi motorla puanladik" bilgisini tasiyor.
 
 
 def load_scoring_rules(path=DEFAULT_SCORING_RULES_PATH):
@@ -224,29 +232,13 @@ _LLM_CIKTI_SEMASI = {
 }
 
 
-def llm_available():
-    """Claude API motoru kullanilabilir mi (SDK kurulu ve kimlik bilgisi var mi).
-
-    Not: ANTHROPIC_API_KEY bos olsa bile `ant auth login` ile kurulmus bir
-    profil olabilir. Bu yuzden anahtarin yoklugu tek basina "API yok"
-    demek degil - SDK'nin kendi cozumleme zincirine guveniyoruz ve gercek
-    kararı cagri anında veriyoruz.
-    """
-    try:
-        import anthropic  # noqa: F401
-    except ImportError:
-        return False
-    return True
-
-
 def _llm_evaluate(bolumler, rubrik, eksik_bolumler):
-    """Claude API ile kriter degerlendirmesi. Basarisiz olursa None doner
-    (cagiran taraf kural motoruna duser)."""
-    try:
-        import anthropic
-    except ImportError:
-        return None, "anthropic SDK kurulu değil"
+    """Secili LLM saglayicisiyla kriter degerlendirmesi.
 
+    Saglayici secimi (Claude / Gemini / kapali) ve tum API ayrintilari
+    llm.py'de; burasi yalnizca istemi kuruyor. Basarisiz olursa
+    (None, hata) doner ve cagiran taraf kural motoruna duser.
+    """
     rubrik_metni = "\n".join(
         f"- {t['kriter']} (rapordaki ağırlığı {t['agirlik']} puan)" for t in rubrik
     )
@@ -266,36 +258,7 @@ def _llm_evaluate(bolumler, rubrik, eksik_bolumler):
         f"RAPOR BÖLÜMLERİ:\n{bolum_metni}{eksik_notu}"
     )
 
-    try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model=LLM_MODEL,
-            max_tokens=LLM_MAX_TOKENS,
-            system=_LLM_SISTEM_PROMPT,
-            messages=[{"role": "user", "content": kullanici_mesaji}],
-            output_config={"format": {"type": "json_schema", "schema": _LLM_CIKTI_SEMASI}},
-        )
-    except anthropic.AuthenticationError:
-        return None, "Claude API kimlik doğrulaması başarısız (ANTHROPIC_API_KEY geçersiz)"
-    except anthropic.RateLimitError:
-        return None, "Claude API hız sınırına takıldı"
-    except anthropic.APIStatusError as e:
-        return None, f"Claude API hatası (HTTP {e.status_code})"
-    except anthropic.APIConnectionError:
-        return None, "Claude API'ye ağ bağlantısı kurulamadı"
-    except Exception as e:  # SDK surumu farkliysa da sistem comesin diye
-        return None, f"Claude API beklenmeyen hata: {type(e).__name__}"
-
-    if response.stop_reason == "refusal":
-        return None, "Claude API isteği güvenlik nedeniyle reddetti"
-
-    try:
-        text = next(b.text for b in response.content if b.type == "text")
-        veri = json.loads(text)
-    except (StopIteration, json.JSONDecodeError, AttributeError):
-        return None, "Claude API yanıtı beklenen JSON formatında değil"
-
-    return veri, None
+    return degerlendir(_LLM_SISTEM_PROMPT, kullanici_mesaji, _LLM_CIKTI_SEMASI)
 
 
 # ---------------------------------------------------------------------------
@@ -382,20 +345,24 @@ def evaluate_criteria(
     kullanilan_motor = "kural"
     llm_veri = None
 
-    if motor in ("otomatik", "llm") and llm_available():
-        llm_veri, llm_hata = _llm_evaluate(bolumler, rubrik, eksik_bolumler)
-        if llm_veri is not None:
-            kullanilan_motor = "llm"
-        else:
+    if motor in ("otomatik", "llm"):
+        kullanilabilir, saglayici_aciklamasi = saglayici_durumu()
+        if kullanilabilir:
+            llm_veri, llm_hata = _llm_evaluate(bolumler, rubrik, eksik_bolumler)
+            if llm_veri is not None:
+                kullanilan_motor = "llm"
+            else:
+                uyarilar.append(
+                    f"LLM değerlendirmesi yapılamadı ({llm_hata}); kural tabanlı "
+                    "yedek motora düşüldü."
+                )
+        elif motor == "llm":
+            # Kullanici acikca LLM istedi ama kullanilamiyor - nedenini
+            # sessizce yutmuyoruz, hakem hangi motorun calistigini bilmeli.
             uyarilar.append(
-                f"Claude API değerlendirmesi yapılamadı ({llm_hata}); kural tabanlı "
-                "yedek motora düşüldü."
+                f"LLM motoru istendi ama kullanılamıyor ({saglayici_aciklamasi}); "
+                "kural tabanlı yedek motora düşüldü."
             )
-    elif motor == "llm":
-        uyarilar.append(
-            "LLM motoru istendi ama anthropic SDK kurulu değil; kural tabanlı yedek "
-            "motora düşüldü."
-        )
 
     # --- Kriter puanlarini uret ------------------------------------------
     if kullanilan_motor == "llm":
@@ -509,7 +476,7 @@ def _build_rationale(
     aksi halde bu bilgi hic goruntulenmezdi.
     """
     motor_adi = (
-        "Claude API ile rubrik tabanlı değerlendirme"
+        f"{saglayici_durumu()[1]} ile rubrik tabanlı değerlendirme"
         if motor == "llm"
         else "kural tabanlı ölçüm (LLM devre dışı)"
     )
