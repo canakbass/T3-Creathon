@@ -1,7 +1,9 @@
 import json
 import os
+import shutil
 import uuid
 import datetime
+import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -15,6 +17,13 @@ router = APIRouter(prefix="/api/reports", tags=["Reports"])
 UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
+
+
+def _dosyayi_diske_yaz(upload: UploadFile, hedef_yol: str) -> None:
+    """Yuklenen dosyayi diske kopyalar. Bloklayan is - ayri bir is
+    parcaciginda cagrilmali (bkz. upload_report)."""
+    with open(hedef_yol, "wb") as buffer:
+        shutil.copyfileobj(upload.file, buffer)
 
 def _attach_analysis_results(report: models.Report) -> models.Report:
     """AiAnalysis kaydinin duz kolonlarini, API'nin dondugu ic ice `results`
@@ -180,12 +189,24 @@ async def upload_report(
         
     report_id = f"RPT-2026-{str(uuid.uuid4())[:6].upper()}"
     file_path = os.path.join(UPLOAD_DIR, f"{report_id}{ext}")
-    
-    # Save file to disk
-    with open(file_path, "wb") as buffer:
-        content = await file.read()
-        buffer.write(content)
-        
+
+    # Dosyayi diske YAZARKEN olay dongusunu (event loop) bloklamiyoruz.
+    #
+    # Onceki hali `with open(...) as buffer: buffer.write(await file.read())`
+    # seklindeydi. Iki sorunu vardi (SonarQube: "Use an asynchronous file API
+    # instead of synchronous open() in this async function"):
+    #   1. open()/write() bloklayan sistem cagrilaridir. Bu fonksiyon
+    #      `async def` oldugu icin olay dongusunun kendi is parcaciginda
+    #      calisiyordu - yani buyuk bir PDF yazilirken sunucu O ANDA baska
+    #      HICBIR istege yanit veremiyordu.
+    #   2. `await file.read()` dosyanin TAMAMINI bellege aliyordu.
+    #
+    # anyio.to_thread.run_sync bloklayan isi ayri bir is parcacigina
+    # tasiyor; shutil.copyfileobj ise parca parca kopyaladigi icin dosya
+    # bellege sigmak zorunda kalmiyor. anyio yeni bir bagimlilik degil -
+    # starlette (dolayisiyla FastAPI) zaten ona bagli.
+    await anyio.to_thread.run_sync(_dosyayi_diske_yaz, file, file_path)
+
     # Create Report record (status = pending)
     db_report = models.Report(
         id=report_id,

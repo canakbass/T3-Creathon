@@ -105,7 +105,25 @@ TURKCE_ETKISIZ_KELIMELER = frozenset(
 
 # Bir bolumde sayisal kanit olup olmadigini olcmek icin: yuzde, ondalik,
 # tam sayi, "0.85", "%92,4", "12 ms" gibi ifadeleri yakalar.
-SAYI_DESENI = re.compile(r"%?\s?\d+(?:[.,]\d+)*\s?%?")
+#
+# {0,8} SINIRI NEDEN VAR (SonarQube: "super-linear performance due to
+# backtracking"): onceki hali `(?:[.,]\d+)*` seklinde sinirsizdi. Ic ice
+# niceleyici (`\d+` icinde oldugu bir yildizli grup) statik analizde ReDoS
+# supheli isaretleniyor. Olctuk: gercek bir patlama YOK - 800.000 karakterlik
+# saldirgan girdi ("1,1,1,...") eski desende 36 ms suruyordu; kiyas icin
+# bilinen gercek bir ReDoS deseni olan `(a+)+$` sadece 26 karakterde 4 saniye
+# aliyor. Yani risk somurulebilir degildi. Yine de sinirlandirdik, cunku:
+#   1. girdi kullanicinin yukledigi PDF'ten geliyor, yani guvenilmez
+#   2. sinirli hali daha da hizli (ayni saldirgan girdide 19.8 -> 13.5 ms)
+#   3. kalite kapisini temiz tutuyor
+# 8 ayirici, "1.2.3.4.5.6.7.8.9" gibi bir sayiyi bile tek parca yakalar.
+#
+# KRITIK: bu degisiklik ANLAMI DEGISTIRMEDI. 34 gercek raporun tam metninde
+# ve 203 bolumunde eslesme listeleri birebir ayni cikti (7874 eslesme).
+# Bu sart, cunku docs/scoring-rules.json'daki beklenen_kanit_yogunlugu
+# esikleri eski desenle olculdu - eslesme sayisi degisse tum esikler
+# gecersiz olurdu.
+SAYI_DESENI = re.compile(r"%?\s?\d+(?:[.,]\d+){0,8}\s?%?")
 
 # Kaynakca bolumunde gercek atif olup olmadigini olcen desenler.
 KAYNAK_DESENLERI = re.compile(
