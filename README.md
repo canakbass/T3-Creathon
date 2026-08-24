@@ -12,9 +12,9 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 | Klasör | Kişi | İçerik | Durum |
 |---|---|---|---|
 | `ai-doc-analysis/` | Hasan | Dil/şablon/başlık kontrolü | ✅ Çalışıyor, gerçek veriyle test edildi (32 test) |
-| `ai-scoring/` | Hayrettin | Kategori, benzerlik, kriter puanlama | ✅ Çalışıyor, backend'e entegre edildi (76 test) — mock'lar kaldırıldı |
-| `backend/` | Mustafa | FastAPI + SQLite — API, veri modeli, auth | ✅ Çalışıyor (auth, upload, analiz akışı, hakem kararı) — 9 test; iki hata düzeltildi (aşağıda) |
-| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Çalışıyor ve **backend'e bağlandı** — 87 test; tüm mock veri kaldırıldı |
+| `ai-scoring/` | Hayrettin | Kategori, benzerlik, kriter puanlama | ✅ Çalışıyor, backend'e entegre edildi (88 test) — mock'lar kaldırıldı |
+| `backend/` | Mustafa | FastAPI — API, veri modeli, auth, yarışma/atama | ✅ Çalışıyor (22 test); SQLite veya Supabase Postgres |
+| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Backend'e bağlı (99 test); tüm mock veri kaldırıldı |
 | `docs/` | — | Ortak dokümanlar, API sözleşmesi, MVP kuralları | Güncel |
 
 ## MVP'nin 6 zorunlu maddesi — hepsi tamam
@@ -28,13 +28,37 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 | 5 | AI kriter değerlendirmesi (puan + gerekçe) | ✅ Hayrettin — gerçek kod, uçtan uca çalışıyor |
 | 6 | Hakemin görüp nihai kararı verebildiği arayüz | ✅ Arayüz canlı API'ye bağlı, hakem AI önerisini ezebiliyor |
 
-**Demo akışı (gerçek veriyle doğrulandı):** Yarışma Yöneticisi giriş yapar →
-proje adı + kategori girip gerçek bir PDF yükler → analiz arka planda çalışır
-(~2 sn) → Hakem giriş yapar, raporu açar, dört AI kontrolünü ve "AI Dördüncü
-Göz" önerisini görür → kendi puanını verip AI önerisini ezer → Yarışmacı
-kendi panelinde sonucunu, güçlü yönlerini ve gelişim önerilerini görür
-(benzerlik/intihal verisi ve AI'nın önerdiği puan yarışmacıya **gösterilmez**)
-→ Değerlendirme Yöneticisi tamamlanma oranını izler.
+**Demo akışı (gerçek veriyle doğrulandı):**
+
+1. **Yarışma Yöneticisi** giriş yapar → yarışma oluşturur → "Kriter ve Şablon
+   Tanımı" ekranından zorunlu başlıkları ve kriter ağırlıklarını girer →
+   başvuruyu açar. (Kurallar tanımlanmadan başvuru **açılamıyor** — AI neye
+   göre kontrol yapacağını bilemez.)
+2. **Yarışmacı** giriş yapar → açık yarışmayı seçip **kendi raporunu yükler**
+   → AI analizi otomatik başlar (~2 sn). Yönetici tek tek dosya yüklemiyor.
+3. **Yarışma Yöneticisi** hakemleri yarışmaya ekler → "Dengeli dağıt" ile
+   raporlar hakemler arasında paylaştırılır → gerekirse tek tek sorumlu
+   hakem değiştirilir.
+4. **Hakem** giriş yapar → **yalnızca kendisine atanan** raporları görür →
+   raporun **kendisini panelde okur/indirir** → dört AI kontrolünü ve "AI
+   Dördüncü Göz" önerisini görür → isterse AI'dan gerekçe **taslağı** ister
+   → kendi puanını verip AI önerisini ezer.
+5. **Yarışmacı** sonucunu, güçlü yönlerini ve gelişim önerilerini görür.
+   Benzerlik/intihal verisi ve AI'nın önerdiği puan yarışmacıya
+   **gösterilmez**.
+6. **Değerlendirme Yöneticisi** tamamlanma oranını izler.
+
+**Çok rollü test hesabı:** `asdfghjkl@gmail.com` / `asdfghjkl` — dört rolün
+hepsine sahip. Girişte rol seçim ekranı çıkar; tek hesapla tüm akış
+denenebilir.
+
+### Yarışma aşamaları
+
+`draft` → `open` → `closed` → `evaluating` → `completed`
+
+Yarışmacı **yalnızca `open`** aşamasında rapor yükleyebilir; yönetici test
+ve düzeltme için her aşamada yükleyebilir. `open`'a geçmek için şablon
+kuralları ve kriterler tanımlı olmalı.
 
 **Not:** `backend/` ve `frontend/`, Mahmut/Mustafa'nın ayrı ilerlettiği
 [t3creathon_web](https://github.com/mahmutconger/t3creathon_web) reposundan
@@ -180,6 +204,17 @@ tutarsızlık bitti, tüm AI çıktıları da Türkçe.
   yalnızca Yarışma Yöneticisi panelinde. Backend her iki role de izin
   veriyor (`RoleChecker(["COMPETITION_MANAGER", "COMPETITOR"])`).
 
+## Yayına alma ve Supabase
+
+Sistem hiçbir şey ayarlanmadan çalışır (SQLite + yerel disk). Yayına almak
+için Supabase Postgres + Storage'a geçilebilir — adım adım rehber ve
+**güvenlik açısından atlanmaması gereken RLS adımı**:
+[`docs/supabase-kurulum.md`](docs/supabase-kurulum.md).
+
+Kısaca: Python backend **Vercel'de çalışmaz** (pdfplumber + scikit-learn
+~200 MB, serverless sınırının üstünde). Backend Render/Railway'e,
+frontend Vercel'e.
+
 ## Kurulum ve test (herkes için)
 
 ```bash
@@ -195,7 +230,7 @@ python ai-scoring/tests/test_scorer.py
 pip install -r backend/requirements.txt
 cd backend && python -m pytest tests/ -v
 
-# frontend (Mahmut)                -> 87 test
+# frontend (Mahmut)                -> 99 test
 cd frontend && npm install && npm test
 ```
 
@@ -235,9 +270,9 @@ Seed kullanıcıları (ilk açılışta oluşur): `manager@`, `referee@`,
 | Paket | Sonuç |
 |---|---|
 | `ai-doc-analysis` | 32 başarılı, 0 başarısız |
-| `ai-scoring` | 76 başarılı, 0 başarısız |
-| `backend` (pytest) | 9 başarılı, 0 başarısız |
-| `frontend` (jest) | 87 başarılı, 0 başarısız |
+| `ai-scoring` | 88 başarılı, 0 başarısız |
+| `backend` (pytest) | 22 başarılı, 0 başarısız |
+| `frontend` (jest) | 99 başarılı, 0 başarısız |
 | `frontend` (next build) | başarılı |
 | Uçtan uca — API akışı | 40 başarılı, 0 başarısız |
 | Uçtan uca — arayüz istek şekilleri (canlı backend) | 32 başarılı, 0 başarısız |
