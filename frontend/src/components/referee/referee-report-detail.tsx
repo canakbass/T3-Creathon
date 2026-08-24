@@ -7,6 +7,7 @@ import type { FinalDecisionSubmission } from "@/lib/final-decision";
 import { formatDate } from "@/lib/format";
 import { AiAnalysisReport } from "./ai-analysis-report";
 import { FinalDecisionForm } from "./final-decision-form";
+import { ReportViewer } from "./report-viewer";
 import { StatusBadge } from "./status-badge";
 
 interface RefereeReportDetailProps {
@@ -16,6 +17,16 @@ interface RefereeReportDetailProps {
   onSubmitDecision?: (submission: FinalDecisionSubmission) => void | Promise<void>;
   /** Bu rapora daha önce karar verilmişse form kilitlenir. */
   decisionAlreadySubmitted?: boolean;
+  /**
+   * Raporun kendisini gösteren görüntüleyiciyi çizer.
+   *
+   * Varsayılan false: bu bileşenin mevcut testleri ona doğrudan prop
+   * veriyor ve ağ çağrısı yapmıyor. Canlı kap bileşeni (referee-report-
+   * container) true geçiyor.
+   */
+  showViewer?: boolean;
+  /** AI gerekçe taslağı isteyen geri çağrım (forma iletiliyor). */
+  onRequestDraft?: () => Promise<string>;
 }
 
 export function RefereeReportDetail({
@@ -23,6 +34,8 @@ export function RefereeReportDetail({
   analysis,
   onSubmitDecision,
   decisionAlreadySubmitted,
+  showViewer = false,
+  onRequestDraft,
 }: RefereeReportDetailProps) {
   return (
     <div className="flex flex-col gap-6" data-testid="referee-report-detail">
@@ -72,6 +85,13 @@ export function RefereeReportDetail({
         </dl>
       </header>
 
+      {/* Raporun kendisi. Analizden ONCE geliyor: hakem once belgeyi
+          okumali, AI ozetini sonra gormeli - tersi, degerlendirmeyi
+          AI'nin cercevesiyle baslatirdi. */}
+      {showViewer ? (
+        <ReportViewer reportId={report.reportId} fileName={`${report.reportId}.pdf`} />
+      ) : null}
+
       {analysis ? (
         <>
           <AiAnalysisReport analysis={analysis} />
@@ -80,6 +100,7 @@ export function RefereeReportDetail({
             suggestion={analysis.suggestion}
             onSubmitDecision={onSubmitDecision}
             decisionAlreadySubmitted={decisionAlreadySubmitted}
+            onRequestDraft={onRequestDraft}
           />
         </>
       ) : (

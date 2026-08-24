@@ -72,6 +72,9 @@ describe("FinalDecisionForm", () => {
       outcome: "revise",
       refereeNotes: JUSTIFICATION,
       overridesAiSuggestion: true,
+      // Denetim izi: gerekce elle yazildi, AI taslagi kullanilmadi.
+      rationaleAiDrafted: false,
+      rationaleEditedByReferee: false,
     });
   });
 
@@ -181,5 +184,112 @@ describe("FinalDecisionForm", () => {
     await user.click(screen.getByRole("button", { name: /nihai kararı gönder/i }));
 
     expect(await screen.findByTestId("decision-saved-banner")).toBeInTheDocument();
+  });
+
+  /**
+   * AI TASLAK GEREKCE - etik cerceve testleri.
+   *
+   * Gerekce, bir insanin raporu gercekten inceledi̇gi̇ni̇n kanitidir. AI
+   * taslak sunabilir ama: otomatik doldurmamali, AI urunu oldugu
+   * gorunmeli, ve gonderilen metnin taslaktan degistirilip
+   * degistirilmedigi kayit altina alinmali.
+   */
+  describe("AI gerekçe taslağı", () => {
+    it("does not offer a draft button when no draft provider is wired", () => {
+      render(<FinalDecisionForm reportId={REPORT_ID} suggestion={suggestion} />);
+      expect(screen.queryByTestId("request-rationale-draft")).not.toBeInTheDocument();
+    });
+
+    it("never auto-fills the rationale — the referee must ask for the draft", () => {
+      render(
+        <FinalDecisionForm
+          reportId={REPORT_ID}
+          suggestion={suggestion}
+          onRequestDraft={async () => "AI taslağı"}
+        />,
+      );
+      expect(screen.getByLabelText(/gerekçe/i)).toHaveValue("");
+      expect(screen.getByTestId("request-rationale-draft")).toBeInTheDocument();
+      expect(screen.queryByTestId("draft-notice")).not.toBeInTheDocument();
+    });
+
+    it("fills the field and shows an AI-origin notice once the draft is requested", async () => {
+      const user = userEvent.setup();
+      render(
+        <FinalDecisionForm
+          reportId={REPORT_ID}
+          suggestion={suggestion}
+          onRequestDraft={async () => "AI tarafından üretilmiş taslak metin."}
+        />,
+      );
+
+      await user.click(screen.getByTestId("request-rationale-draft"));
+
+      await waitFor(() =>
+        expect(screen.getByLabelText(/gerekçe/i)).toHaveValue(
+          "AI tarafından üretilmiş taslak metin.",
+        ),
+      );
+      const notice = screen.getByTestId("draft-notice");
+      expect(notice).toHaveTextContent(/taslaktır/i);
+      expect(notice).toHaveTextContent(/kayıt altına alınır/i);
+    });
+
+    it("records that the rationale came from a draft and was NOT edited", async () => {
+      const onSubmitDecision = jest.fn();
+      const taslak =
+        "AI taslağı: rapor şablona uygun, özgünlük bölümü gözden geçirilmeli, bu yeterince uzun bir gerekçe metnidir.";
+      const user = userEvent.setup();
+      render(
+        <FinalDecisionForm
+          reportId={REPORT_ID}
+          suggestion={suggestion}
+          onSubmitDecision={onSubmitDecision}
+          onRequestDraft={async () => taslak}
+        />,
+      );
+
+      await user.click(screen.getByTestId("request-rationale-draft"));
+      await waitFor(() => expect(screen.getByLabelText(/gerekçe/i)).toHaveValue(taslak));
+      await user.click(screen.getByRole("button", { name: /nihai kararı gönder/i }));
+
+      await waitFor(() => expect(onSubmitDecision).toHaveBeenCalledTimes(1));
+      expect(onSubmitDecision).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rationaleAiDrafted: true,
+          rationaleEditedByReferee: false,
+        }),
+      );
+    });
+
+    it("records when the referee edited the draft before submitting", async () => {
+      const onSubmitDecision = jest.fn();
+      const taslak = "AI taslağı: rapor şablona uygun ve bu metin yeterince uzundur.";
+      const user = userEvent.setup();
+      render(
+        <FinalDecisionForm
+          reportId={REPORT_ID}
+          suggestion={suggestion}
+          onSubmitDecision={onSubmitDecision}
+          onRequestDraft={async () => taslak}
+        />,
+      );
+
+      await user.click(screen.getByTestId("request-rationale-draft"));
+      await waitFor(() => expect(screen.getByLabelText(/gerekçe/i)).toHaveValue(taslak));
+      await user.type(
+        screen.getByLabelText(/gerekçe/i),
+        " Kendi değerlendirmem: özgünlük yetersiz.",
+      );
+      await user.click(screen.getByRole("button", { name: /nihai kararı gönder/i }));
+
+      await waitFor(() => expect(onSubmitDecision).toHaveBeenCalledTimes(1));
+      expect(onSubmitDecision).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rationaleAiDrafted: true,
+          rationaleEditedByReferee: true,
+        }),
+      );
+    });
   });
 });

@@ -28,6 +28,13 @@ interface FinalDecisionFormProps {
   onSubmitDecision?: (submission: FinalDecisionSubmission) => void | Promise<void>;
   /** Bu rapor için karar zaten verilmişse form salt-okunur gösterilir. */
   decisionAlreadySubmitted?: boolean;
+  /**
+   * AI gerekçe taslağı ister. Verilmezse taslak düğmesi hiç görünmez.
+   *
+   * Bilinçli olarak isteğe bağlı: taslak özelliği yoksa form eskisi gibi
+   * tamamen elle doldurulur.
+   */
+  onRequestDraft?: () => Promise<string>;
 }
 
 export function FinalDecisionForm({
@@ -35,8 +42,14 @@ export function FinalDecisionForm({
   suggestion,
   onSubmitDecision,
   decisionAlreadySubmitted = false,
+  onRequestDraft,
 }: FinalDecisionFormProps) {
   const [submitted, setSubmitted] = useState<FinalDecisionSubmission | null>(null);
+  // AI taslagi alindiysa metni saklıyoruz - gonderilen gerekcenin
+  // taslaktan DEGISTIRILIP degistirilmedigini boyle anliyoruz.
+  const [taslakMetni, setTaslakMetni] = useState<string | null>(null);
+  const [taslakYukleniyor, setTaslakYukleniyor] = useState(false);
+  const [taslakHatasi, setTaslakHatasi] = useState<string | null>(null);
   const headingId = useId();
 
   const defaults: FinalDecisionFormInput = {
@@ -62,12 +75,43 @@ export function FinalDecisionForm({
   const overridesAiSuggestion =
     Number(currentScore) !== suggestion.score || currentOutcome !== suggestion.outcome;
 
+  /**
+   * AI'dan gerekçe TASLAĞI ister ve metin alanına yazar.
+   *
+   * ETİK ÇERÇEVE: taslak OTOMATİK DOLDURULMUYOR — hakem bu düğmeye
+   * basmak zorunda. Taslak yeni bir yargı üretmiyor, analizin zaten
+   * bulduğu somut bulguları toparlıyor. Gönderilen metnin taslaktan gelip
+   * gelmediği ve DEĞİŞTİRİLİP değiştirilmediği backend'e bildirilip kayıt
+   * altına alınıyor: sonradan itiraz olursa "bu gerekçeyi kim yazdı"
+   * sorusunun cevabı kayıtlı olmalı.
+   */
+  async function taslakIste() {
+    if (!onRequestDraft) return;
+    setTaslakHatasi(null);
+    setTaslakYukleniyor(true);
+    try {
+      const metin = await onRequestDraft();
+      setValue("refereeNotes", metin, { shouldValidate: true });
+      setTaslakMetni(metin);
+    } catch (cause) {
+      setTaslakHatasi(
+        cause instanceof Error ? cause.message : "Taslak alınamadı.",
+      );
+    } finally {
+      setTaslakYukleniyor(false);
+    }
+  }
+
   async function onValid(values: FinalDecisionFormValues) {
     const submission: FinalDecisionSubmission = {
       ...values,
       reportId,
       overridesAiSuggestion:
         values.finalScore !== suggestion.score || values.outcome !== suggestion.outcome,
+      // Denetim izi
+      rationaleAiDrafted: taslakMetni !== null,
+      rationaleEditedByReferee:
+        taslakMetni !== null && values.refereeNotes.trim() !== taslakMetni.trim(),
     };
 
     // Kayit BASARILI olduktan SONRA basari bandini gosteriyoruz.
@@ -295,9 +339,39 @@ export function FinalDecisionForm({
           </fieldset>
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="refereeNotes" className="text-sm font-semibold text-foreground">
-              Gerekçe
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label htmlFor="refereeNotes" className="text-sm font-semibold text-foreground">
+                Gerekçe
+              </label>
+              {onRequestDraft ? (
+                <button
+                  type="button"
+                  onClick={() => void taslakIste()}
+                  disabled={taslakYukleniyor || decisionAlreadySubmitted}
+                  data-testid="request-rationale-draft"
+                  className="rounded-lg border border-border px-3 py-1 text-xs font-semibold text-brand-700 transition hover:border-brand-300 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {taslakYukleniyor ? "Taslak hazırlanıyor…" : "AI taslağı öner"}
+                </button>
+              ) : null}
+            </div>
+
+            {taslakHatasi ? (
+              <p role="alert" className="text-xs font-medium text-red-600">
+                {taslakHatasi}
+              </p>
+            ) : null}
+
+            {taslakMetni ? (
+              <p
+                data-testid="draft-notice"
+                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800"
+              >
+                Bu metin AI analizinden üretilmiş bir <strong>taslaktır</strong>. Nihai
+                gerekçe sizin değerlendirmenizdir — göndermeden önce kendi görüşünüzü
+                ekleyin. Metnin taslaktan değiştirilip değiştirilmediği kayıt altına alınır.
+              </p>
+            ) : null}
             <textarea
               id="refereeNotes"
               rows={4}

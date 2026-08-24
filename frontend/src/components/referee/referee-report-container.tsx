@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getReport, pollUntilAnalyzed, submitDecision, type ReportWithAnalysis } from "@/lib/api";
+import {
+  fetchRationaleDraft,
+  getReport,
+  pollUntilAnalyzed,
+  submitDecision,
+  type ReportWithAnalysis,
+} from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
 import type { FinalDecisionSubmission } from "@/lib/final-decision";
 import { RefereeReportDetail } from "./referee-report-detail";
@@ -71,6 +77,8 @@ export function RefereeReportContainer({ reportId }: { reportId: string }) {
           finalScore: submission.finalScore,
           // Arayuzde `refereeNotes`, backend'de `rationale`.
           rationale: submission.refereeNotes,
+          rationaleAiDrafted: submission.rationaleAiDrafted,
+          rationaleEditedByReferee: submission.rationaleEditedByReferee,
         });
         // Karar sonrasi rapor durumu degisiyor (approved/rejected/revise) -
         // rozetin guncellenmesi icin tazeliyoruz.
@@ -123,6 +131,10 @@ export function RefereeReportContainer({ reportId }: { reportId: string }) {
         analysis={data.analysis}
         onSubmitDecision={data.hasDecision ? undefined : handleSubmitDecision}
         decisionAlreadySubmitted={data.hasDecision}
+        // Canli akista raporun kendisi gosteriliyor. Sunum bileseninin
+        // kendi testleri ag cagrisi yapmadigi icin varsayilan kapali.
+        showViewer
+        onRequestDraft={async () => (await fetchRationaleDraft(reportId)).draft}
       />
     </div>
   );

@@ -39,4 +39,13 @@ export interface FinalDecisionSubmission extends FinalDecisionFormValues {
   reportId: string;
   /** True when the referee changed the score or outcome the AI 4th Eye proposed. */
   overridesAiSuggestion: boolean;
+  /**
+   * Denetim izi — gerekçe AI taslağından mı geldi ve hakem onu değiştirdi mi.
+   *
+   * Gerekçe, bir insanın raporu gerçekten incelediğinin kanıtıdır. AI taslak
+   * sunabilir, ama hangi metnin AI'dan geldiği izlenebilir kalmalı: sonradan
+   * itiraz olursa "bu gerekçeyi kim yazdı" sorusunun cevabı kayıtlı olsun.
+   */
+  rationaleAiDrafted?: boolean;
+  rationaleEditedByReferee?: boolean;
 }

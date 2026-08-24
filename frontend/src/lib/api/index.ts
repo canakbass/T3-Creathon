@@ -214,6 +214,9 @@ export interface SubmitDecisionInput {
   finalScore: number;
   /** Hakemin gerekçesi. Backend alanın adı `rationale`, arayüzde `refereeNotes`. */
   rationale: string;
+  /** Denetim izi: gerekçe AI taslağından mı geldi, hakem değiştirdi mi. */
+  rationaleAiDrafted?: boolean;
+  rationaleEditedByReferee?: boolean;
 }
 
 export async function submitDecision(input: SubmitDecisionInput): Promise<WireFinalDecision> {
@@ -226,6 +229,8 @@ export async function submitDecision(input: SubmitDecisionInput): Promise<WireFi
         // Backend kolonu INTEGER; ondalık gönderilirse Pydantic reddeder.
         final_score: Math.round(input.finalScore),
         rationale: input.rationale,
+        rationale_ai_drafted: input.rationaleAiDrafted ?? false,
+        rationale_edited_by_referee: input.rationaleEditedByReferee ?? false,
       },
     },
   );
