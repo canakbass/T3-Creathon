@@ -238,10 +238,16 @@ class ReportResponse(ReportBase):
     id: str
     status: str
     file_path: str
+    original_filename: Optional[str] = None
+    competition_id: Optional[str] = None
     submitted_by_id: str
     submission_date: datetime
     ai_analysis: Optional[AiAnalysisResponse] = None
     final_decision: Optional[FinalDecisionResponse] = None
+    # Atama bilgisi listede de donuyor: yonetici panelinin her rapor icin
+    # ayri bir istek atmasini (N+1) onlemek icin.
+    assigned_referee_id: Optional[str] = None
+    assigned_referee_email: Optional[EmailStr] = None
 
     class Config:
         from_attributes = True

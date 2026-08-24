@@ -162,6 +162,35 @@ export async function listReports(options: { status?: string } = {}): Promise<Ev
   return wire.map((r) => toEvaluationReport(r, categoryNames));
 }
 
+/**
+ * Yönetici paneli için: rapor + atama + karar bilgisi, TEK istekte.
+ *
+ * `listReports` yalnızca arayüzün `EvaluationReport` tipini döndürüyor;
+ * atama panelinin sorumlu hakemi ve karar durumunu da bilmesi gerekiyor.
+ * Bunu her rapor için ayrı `getReport` çağırarak yapmak N+1 istek olurdu.
+ */
+export interface ReportRow {
+  report: EvaluationReport;
+  assignedRefereeId: string | null;
+  assignedRefereeEmail: string | null;
+  hasDecision: boolean;
+  competitionId: string | null;
+}
+
+export async function listReportRows(): Promise<ReportRow[]> {
+  const [wire, names] = await Promise.all([
+    apiFetch<WireReport[]>("/api/reports"),
+    loadCategoryNames(),
+  ]);
+  return wire.map((r) => ({
+    report: toEvaluationReport(r, names),
+    assignedRefereeId: r.assigned_referee_id,
+    assignedRefereeEmail: r.assigned_referee_email,
+    hasDecision: r.final_decision !== null,
+    competitionId: r.competition_id,
+  }));
+}
+
 export async function getReport(
   reportId: string,
   categoryNames?: CategoryNameMap,
@@ -187,7 +216,9 @@ export async function getReport(
 
 export interface UploadReportInput {
   projectName: string;
-  categoryId: string;
+  /** Yarışma verilirse kategori ondan alınır; ayrıca seçmeye gerek yok. */
+  competitionId?: string;
+  categoryId?: string;
   file: File;
 }
 
@@ -198,7 +229,8 @@ export interface UploadReportInput {
 export async function uploadReport(input: UploadReportInput): Promise<EvaluationReport> {
   const form = new FormData();
   form.append("project_name", input.projectName);
-  form.append("category_id", input.categoryId);
+  if (input.competitionId) form.append("competition_id", input.competitionId);
+  if (input.categoryId) form.append("category_id", input.categoryId);
   form.append("file", input.file);
 
   const wire = await apiFetch<WireReport>("/api/reports/upload", {

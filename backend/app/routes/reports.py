@@ -49,6 +49,16 @@ def _attach_analysis_results(report: models.Report) -> models.Report:
     Anahtar adlari camelCase: frontend/src/lib/ai-analysis.ts icindeki
     CHECK_KEYS ile birebir ayni olmali.
     """
+    # Atama bilgisini yaniti hazirlarken ekliyoruz: yonetici paneli her rapor
+    # icin ayri bir istek atmak zorunda kalmasin (N+1).
+    atama = report.assignment
+    setattr(report, "assigned_referee_id", atama.referee_id if atama else None)
+    setattr(
+        report,
+        "assigned_referee_email",
+        atama.referee.email if atama and atama.referee else None,
+    )
+
     analysis = report.ai_analysis
     if not analysis:
         return report

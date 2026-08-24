@@ -46,6 +46,12 @@ interface ReportUploadProps {
   onUploadComplete?: (fileName: string) => void;
   /** Testlerde API cagrisini atlamak icin kategori listesini dogrudan ver. */
   initialCategories?: WireCategory[];
+  /**
+   * Yarismaya bagli yukleme. Verilirse kategori secimi GIZLENIYOR -
+   * kategori yarismadan geliyor, kullanicinin ayrica secmesi hem
+   * gereksiz hem de yanlis secme riski.
+   */
+  competitionId?: string;
 }
 
 function isAcceptedFile(file: File): boolean {
@@ -63,6 +69,7 @@ function nextId(): string {
 export function ReportUpload({
   onUploadComplete,
   initialCategories,
+  competitionId,
 }: ReportUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [items, setItems] = useState<UploadItem[]>([]);
@@ -77,7 +84,7 @@ export function ReportUpload({
   const dragCounter = useRef(0);
 
   useEffect(() => {
-    if (initialCategories) return;
+    if (initialCategories || competitionId) return;
     let cancelled = false;
     (async () => {
       try {
@@ -92,7 +99,7 @@ export function ReportUpload({
     return () => {
       cancelled = true;
     };
-  }, [initialCategories]);
+  }, [initialCategories, competitionId]);
 
   const patchItem = useCallback((id: string, patch: Partial<UploadItem>) => {
     setItems((current) =>
@@ -114,7 +121,7 @@ export function ReportUpload({
       try {
         const report = await uploadReport({
           projectName: name,
-          categoryId: category,
+          ...(competitionId ? { competitionId } : { categoryId: category }),
           file,
         });
 
@@ -133,7 +140,7 @@ export function ReportUpload({
         });
       }
     },
-    [onUploadComplete, patchItem],
+    [competitionId, onUploadComplete, patchItem],
   );
 
   const addFiles = useCallback(
@@ -160,7 +167,7 @@ export function ReportUpload({
 
         // Backend project_name ve category_id'yi ZORUNLU tutuyor; eksikse
         // istek 422 doner. Kullaniciyi sunucuya gitmeden uyariyoruz.
-        if (!trimmedName || !categoryId) {
+        if (!trimmedName || (!competitionId && !categoryId)) {
           setItems((current) => [
             ...current,
             {
@@ -184,7 +191,7 @@ export function ReportUpload({
         void performUpload(id, file, trimmedName, categoryId);
       });
     },
-    [categoryId, performUpload, projectName],
+    [categoryId, competitionId, performUpload, projectName],
   );
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -278,6 +285,7 @@ export function ReportUpload({
           />
         </label>
 
+        {competitionId ? null : (
         <label htmlFor={categoryFieldId} className="flex flex-col gap-1.5">
           <span className="text-xs font-semibold uppercase tracking-wide text-muted">
             Kategori
@@ -297,6 +305,7 @@ export function ReportUpload({
             ))}
           </select>
         </label>
+        )}
       </div>
 
       <div

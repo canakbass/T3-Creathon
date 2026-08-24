@@ -143,8 +143,13 @@ export interface WireReport {
   file_path: string;
   submitted_by_id: string;
   submission_date: string;
+  original_filename: string | null;
+  competition_id: string | null;
   ai_analysis: WireAiAnalysis | null;
   final_decision: WireFinalDecision | null;
+  /** Atanan hakem — listede de geliyor, ayrı istek gerekmiyor. */
+  assigned_referee_id: string | null;
+  assigned_referee_email: string | null;
 }
 
 /** GET /api/dashboard/stats yanıtı (schemas.DashboardStats) */

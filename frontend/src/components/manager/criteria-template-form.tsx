@@ -12,10 +12,21 @@ import {
 } from "@/lib/criteria-template";
 
 interface CriteriaTemplateFormProps {
-  onSaved?: (values: CriteriaTemplateFormValues) => void;
+  /**
+   * Şablonu kalıcı hale getirir.
+   *
+   * Promise DÖNEBİLİR ve dönerse `await` edilir: reddedilirse başarı bandı
+   * gösterilmez ve form SIFIRLANMAZ. Önceden bu geri çağrım senkron
+   * çağrılıyor, başarı ondan önce kuruluyor ve form hemen sıfırlanıyordu —
+   * yani kayıt başarısız olsa bile kullanıcı hem "kaydedildi" görüyor hem
+   * de girdiği her şeyi kaybediyordu.
+   */
+  onSaved?: (values: CriteriaTemplateFormValues) => void | Promise<void>;
+  /** Dışarıdan gelen hata (örn. sunucu reddi) formun içinde gösterilir. */
+  submitError?: string | null;
 }
 
-export function CriteriaTemplateForm({ onSaved }: CriteriaTemplateFormProps) {
+export function CriteriaTemplateForm({ onSaved, submitError }: CriteriaTemplateFormProps) {
   const [savedTemplateName, setSavedTemplateName] = useState<string | null>(null);
   const formHeadingId = useId();
 
@@ -43,9 +54,15 @@ export function CriteriaTemplateForm({ onSaved }: CriteriaTemplateFormProps) {
       ? errors.requiredHeadings.message
       : undefined);
 
-  function onValid(values: CriteriaTemplateFormValues) {
+  async function onValid(values: CriteriaTemplateFormValues) {
+    // Kayit BASARILI olduktan SONRA basari gosterip formu sifirliyoruz.
+    // Reddedilirse form dolu kaliyor ki kullanici tekrar deneyebilsin.
+    try {
+      await onSaved?.(values);
+    } catch {
+      return;
+    }
     setSavedTemplateName(values.templateName);
-    onSaved?.(values);
     reset(DEFAULT_CRITERIA_TEMPLATE_VALUES);
   }
 
@@ -63,6 +80,16 @@ export function CriteriaTemplateForm({ onSaved }: CriteriaTemplateFormProps) {
           metriklerini, kategoriyi ve zorunlu rapor başlıklarını tanımlayın.
         </p>
       </div>
+
+      {submitError ? (
+        <div
+          role="alert"
+          data-testid="template-error"
+          className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700"
+        >
+          {submitError}
+        </div>
+      ) : null}
 
       {savedTemplateName && (
         <div
