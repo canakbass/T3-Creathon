@@ -108,6 +108,7 @@ def run_full_analysis(
     existing_files: List[str],
     criteria_list: List[Dict[str, Any]],
     declared_category_id: Optional[str] = None,
+    rules: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """Dort kontrolu tek AiAnalysis yukune birlestirir.
 
@@ -128,10 +129,13 @@ def run_full_analysis(
     cozum icin AiAnalysis'e bir kolon/tablo eklenmesi gerekir - bunu
     Mustafa ile konusmak lazim, tek tarafli sema degisikligi yapmadim.
     """
-    rules = load_rules()
+    # Yarisma kendi sablon kurallarini tanimladiysa ONLAR kullaniliyor
+    # (zorunlu basliklar, kabul edilen dil, sayfa siniri). Tanimlamadiysa
+    # docs/mvp-rules.json'daki varsayilanlara dusuluyor.
+    rules = rules if rules is not None else load_rules()
     scoring_rules = load_scoring_rules()
 
-    doc_res = analyze_document(file_path)
+    doc_res = _hasan_analyze_document(file_path, rules)
     cat_res = analyze_category_fit(
         file_path, db_categories, declared_category_id, rules, scoring_rules
     )

@@ -13,6 +13,7 @@ from typing import List, Optional
 from ..database import get_db
 from .. import models, schemas, auth
 from ..services import ai
+from . import competitions
 
 router = APIRouter(prefix="/api/reports", tags=["Reports"])
 
@@ -108,11 +109,30 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
         other_reports = db.query(models.Report).filter(models.Report.id != report_id).all()
         existing_paths = [r.file_path for r in other_reports if os.path.exists(r.file_path)]
         
-        # Get criteria templates for this report's category
         report = db.query(models.Report).filter(models.Report.id == report_id).first()
-        criteria = db.query(models.Criteria).filter(models.Criteria.category_id == report.category_id).all()
-        criteria_dict = [{"id": cr.id, "title": cr.title, "max_score": cr.max_score} for cr in criteria]
-        
+
+        # Kriterler: rapor bir YARISMAYA bagliysa o yarismanin kriterleri
+        # (agirliklariyla birlikte) kullaniliyor. Degilse eski kategori
+        # bazli kriter tablosuna dusuluyor.
+        if report.competition and report.competition.criteria_list:
+            criteria_dict = [
+                {"id": k.id, "title": k.title, "weight": k.weight, "max_score": 100}
+                for k in sorted(report.competition.criteria_list, key=lambda k: k.display_order)
+            ]
+        else:
+            criteria = db.query(models.Criteria).filter(
+                models.Criteria.category_id == report.category_id
+            ).all()
+            criteria_dict = [
+                {"id": cr.id, "title": cr.title, "max_score": cr.max_score} for cr in criteria
+            ]
+
+        # Sablon kurallari: yarisma kendi kurallarini tanimladiysa ONLAR
+        # kullaniliyor. Onceden bu degerler tum sistem icin
+        # docs/mvp-rules.json'da SABITTI; artik her yarisma kendi zorunlu
+        # basliklarini, dilini ve sayfa sinirini belirleyebiliyor.
+        rules = competitions.yarismanin_kurallari(report.competition)
+
         # Run AI analysis.
         # declared_category_id: yarismacinin yukleme sirasinda sectigi
         # kategori. Bu olmadan kategori kontrolu yalnizca "en uygun kategori
@@ -123,7 +143,8 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
             db_categories=categories_dict,
             existing_files=existing_paths,
             criteria_list=criteria_dict,
-            declared_category_id=report.category_id
+            declared_category_id=report.category_id,
+            rules=rules,
         )
         
         # Save analysis results
@@ -171,16 +192,50 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
 async def upload_report(
     background_tasks: BackgroundTasks,
     project_name: str = Form(...),
-    category_id: str = Form(...),
+    category_id: str = Form(None),
+    competition_id: str = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.RoleChecker(["COMPETITION_MANAGER", "COMPETITOR"]))
 ):
-    # Verify category
+    """Rapor yukler ve AI analizini arka planda baslatir.
+
+    `competition_id` verilirse yarismanin asamasi kontrol edilir ve kategori
+    yarismadan alinir - yarismacinin kategori secmesine gerek kalmaz.
+    Yarisma verilmezse eski davranis (kategori dogrudan secilir) surdurulur.
+    """
+    competition = None
+    if competition_id:
+        competition = db.query(models.Competition).filter(
+            models.Competition.id == competition_id
+        ).first()
+        if not competition:
+            raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+
+        # Yarismacinin rapor yukleyebilmesi yarismanin ASAMASINA bagli.
+        # Yonetici test/duzeltme amaciyla her asamada yukleyebilir.
+        aktif = getattr(current_user, "active_role", None)
+        if aktif == "COMPETITOR" and competition.status not in ("open",):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"'{competition.name}' yarismasina su anda basvuru "
+                    f"yapilamiyor (asama: {competition.status})."
+                ),
+            )
+        # Kategori yarismadan geliyor - yarismacinin ayrica secmesine gerek yok.
+        category_id = competition.category_id
+
+    if not category_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="category_id ya da competition_id verilmeli.",
+        )
+
     category = db.query(models.Category).filter(models.Category.id == category_id).first()
     if not category:
         raise HTTPException(status_code=404, detail="Category not found.")
-        
+
     # Check file extension
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in [".pdf", ".doc", ".docx"]:
@@ -220,6 +275,7 @@ async def upload_report(
         # indirme sirasinda kullaniciya kendi verdigi adi gosterebilmek
         # icin orijinali de sakliyoruz.
         original_filename=file.filename,
+        competition_id=competition.id if competition else None,
         submitted_by_id=current_user.id,
         submission_date=datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     )

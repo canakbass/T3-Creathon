@@ -27,3 +27,7 @@ ai-scoring/calibration-output.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# Gelistirme sunucusu yardimcilari
+.dev-backend.pid
+.dev-backend.log

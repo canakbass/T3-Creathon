@@ -10,6 +10,7 @@ from app.routes import (
     reports as reports_router,
     dashboard as dashboard_router,
     assignments as assignments_router,
+    competitions as competitions_router,
 )
 from app import models, auth
 
@@ -37,6 +38,7 @@ app.include_router(criteria_router.router)
 app.include_router(reports_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(assignments_router.router)
+app.include_router(competitions_router.router)
 
 
 @app.get("/")

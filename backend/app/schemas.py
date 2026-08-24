@@ -41,6 +41,60 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# --- Competition Schemas ---
+class CompetitionCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category_id: str
+    submission_deadline: Optional[datetime] = None
+
+class CompetitionTemplate(BaseModel):
+    """Yarismanin sablon kurallari - AI dil/sablon/baslik kontrolu bunlari kullanir."""
+    accepted_languages: List[str] = ["tr"]
+    required_headings: List[str]
+    heading_synonyms: Optional[Dict[str, List[str]]] = None
+    min_pages: Optional[int] = None
+    max_pages: Optional[int] = None
+    min_section_chars: Optional[int] = None
+
+class CriterionInput(BaseModel):
+    title: str
+    description: Optional[str] = None
+    weight: int
+
+class CompetitionCriteriaSet(BaseModel):
+    criteria: List[CriterionInput]
+
+class CriterionResponse(BaseModel):
+    id: str
+    title: str
+    description: Optional[str] = None
+    weight: int
+    display_order: int
+
+class CompetitionStatusUpdate(BaseModel):
+    status: str
+
+class CompetitionResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    category_id: str
+    category_name: Optional[str] = None
+    status: str
+    submission_deadline: Optional[datetime] = None
+    created_at: datetime
+    accepted_languages: List[str] = []
+    required_headings: List[str] = []
+    heading_synonyms: Dict[str, List[str]] = {}
+    min_pages: Optional[int] = None
+    max_pages: Optional[int] = None
+    min_section_chars: Optional[int] = None
+    criteria: List[CriterionResponse] = []
+    referee_count: int = 0
+    report_count: int = 0
+
+
 class RefereeSummary(BaseModel):
     id: str
     email: EmailStr
