@@ -17,6 +17,11 @@ build/
 backend/uploads/
 backend/.env
 
+# AI modulleri - uretilen olcum ciktilari
+# (sayilarin kendisi docs/scoring-rules.json icinde kaynagiyla birlikte
+# kayitli; uretilen dosyayi commit'lemek kod degisince bayatlamaya aciktir)
+ai-scoring/calibration-output.json
+
 # Editor / OS
 .vscode/
 .idea/

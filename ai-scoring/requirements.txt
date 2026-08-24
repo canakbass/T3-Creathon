@@ -1,0 +1,17 @@
+# ai-doc-analysis (Hasan) ile ayni PDF/dil katmanini kullaniyoruz - bu modul
+# metin cikarma ve bolumleme icin onun analyzer.py'sini import ediyor.
+pdfplumber
+langdetect
+
+# Benzerlik ve kategori analizinde TF-IDF + kosinus benzerligi icin.
+# ZORUNLU DEGIL: kurulu olmasa da sistem calisir, cunku benzerlik PUANI
+# birebir kelime ortusmesinden hesaplaniyor (saf Python). scikit-learn
+# yalnizca hakeme BAGLAM olarak gosterilen konusal benzerligi ve anahtar
+# kelime tanimi olmayan kategoriler icin kullanilan karakter n-gram
+# yedegini uretiyor; yoksa o iki sinyal sessizce atlaniyor.
+scikit-learn
+
+# Kriter degerlendirmesinde Claude API motoru icin. ZORUNLU DEGIL:
+# kurulu degilse (ya da ANTHROPIC_API_KEY yoksa) modul deterministik
+# kural motoruna duser ve bunu hakem gerekcesinde acikca belirtir.
+# anthropic

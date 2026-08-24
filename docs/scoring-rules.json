@@ -1,0 +1,126 @@
+{
+  "_not": "ai-scoring modulunun (Hayrettin) kural deposu. Kurallar koda gomulmez, buraya yazilir - boylece Yarisma Yoneticisi her yarisma icin kod degistirmeden ayarlayabilir (bkz. docs/PROJECT_CONTEXT.md Bolum 8 'Standartlik'). Bu dosyadaki SAYILAR TAHMIN DEGIL: 34 gercek TEKNOFEST finalist raporu (Havacilikta YZ / KTR 2022) olculerek turetildi - `python ai-scoring/calibrate.py` ciktisindan. Her esigin nereden geldigi ilgili alanin _kaynak notunda yazili.",
+
+  "kriter_rubrigi": {
+    "_not": "Bolum agirliklari docs/api-contract.md Bolum 2'deki referans rubrikten. 'beklenen_karakter', 34 gercek raporun o bolumdeki uzunluk dagiliminin 25. yuzdelik dilimi (p25): yani bir bolum, gercek finalistlerin en kisa %25'i kadar doluysa doluluk puanini tam aliyor. p25 secildi cunku amac 'iyi rapor' odullendirmek degil, 'kabul edilebilir alt sinirin altinda mi' sorusunu yanitlamak - nihai karar hakemde.",
+    "bolumler": [
+      {
+        "kriter": "Takım Şeması",
+        "agirlik": 5,
+        "beklenen_karakter": 11,
+        "_kaynak": "p25=11, medyan=645. Cok dusuk cunku bu bolum genelde bir GORSEL (organizasyon semasi) - 34 raporun 12'sinde neredeyse hic duz metin yok. Metin azligini kusur saymamak dogru davranis; Hasan'in mvp-rules.json'inda da bu bolum icin min_bolum_karakter=0 istisnasi var.",
+        "sinyaller": { "doluluk": 1.0 }
+      },
+      {
+        "kriter": "Proje Mevcut Durum Değerlendirmesi",
+        "agirlik": 15,
+        "beklenen_karakter": 1396,
+        "beklenen_kanit_yogunlugu": 4.3,
+        "_kaynak": "uzunluk p25=1396 (medyan 1964); kanit yogunlugu p25=4.3 sayi/1000 karakter (medyan 6.0)",
+        "sinyaller": { "doluluk": 0.6, "kanit": 0.4 }
+      },
+      {
+        "kriter": "Algoritmalar ve Sistem Mimarisi",
+        "agirlik": 25,
+        "beklenen_karakter": 4115,
+        "beklenen_kanit_yogunlugu": 6.5,
+        "beklenen_teknik_terim": 10,
+        "_kaynak": "uzunluk p25=4115 (medyan 5665); kanit yogunlugu p25=6.5; teknik terim: 34 raporun bu bolumunde gecen FARKLI teknik terim sayisi olculdu - min 1, p25 10, medyan 11.5, max 18. Esik p25=10'a kuruldu. (Ilk taslakta 12 yazmistik, hicbir olcume dayanmiyordu ve raporlarin yarisini gereksiz cezalandiriyordu.)",
+        "sinyaller": { "doluluk": 0.5, "kanit": 0.25, "teknik": 0.25 }
+      },
+      {
+        "kriter": "Özgünlük",
+        "agirlik": 25,
+        "beklenen_karakter": 1436,
+        "beklenen_kanit_yogunlugu": 3.4,
+        "beklenen_ozgunluk_ifadesi": 2,
+        "_kaynak": "uzunluk p25=1436 (medyan 2007); kanit yogunlugu p25=3.4. Ozgunluk ifadesi: 34 raporun Ozgunluk bolumunde gecen FARKLI ozgunluk ifadesi sayisi olculdu - min 0, p25 1, medyan 1, max 5. Esik 2'ye kuruldu (ilk taslakta 3'tu, olculmemisti ve gercek finalistlerin cogunu cezalandiriyordu).",
+        "_sinyal_agirligi_notu": "ozgunluk_dili agirligi 0.3'ten 0.2'ye dusuruldu: olcum bu sinyalin ZAYIF oldugunu gosterdi (listedeki 27 ifadeden yalnizca 13'u 34 raporda hic gecti, medyan isabet 1). Zayif bir sinyalin 25 puanlik bir kriterin %30'unu belirlemesi dogru degil; fark kanit sinyaline aktarildi. Bu kriterin AYIRT EDICI olmasi ise istenen davranis - herkesin 100 aldigi bir kriter hakeme bilgi vermez.",
+        "sinyaller": { "doluluk": 0.5, "ozgunluk_dili": 0.2, "kanit": 0.3 }
+      },
+      {
+        "kriter": "Sonuçlar ve İnceleme",
+        "agirlik": 25,
+        "beklenen_karakter": 1491,
+        "beklenen_kanit_yogunlugu": 8.5,
+        "_kaynak": "uzunluk p25=1491 (medyan 1926); kanit yogunlugu p25=8.5 - tum bolumler icinde en yuksegi, cunku sonuc bolumunun somut sayi/metrik icermesi bekleniyor. Bu yuzden 'kanit' sinyaline en buyuk agirlik burada verildi.",
+        "sinyaller": { "doluluk": 0.4, "kanit": 0.6 }
+      },
+      {
+        "kriter": "Kaynakça",
+        "agirlik": 5,
+        "beklenen_karakter": 796,
+        "beklenen_atif": 9,
+        "_kaynak": "uzunluk p25=796 (medyan 1678); atif sayisi p25=9 (medyan 15)",
+        "sinyaller": { "atif": 1.0 }
+      }
+    ]
+  },
+
+  "karar_esikleri": {
+    "_not": "Agirlikli toplam puandan AI'nin ONERISI uretilir - nihai karar HER ZAMAN hakemde (bkz. docs/PROJECT_CONTEXT.md Bolum 1 KRITIK ILKE). Esikler frontend'in pozitif-polarite bantlariyla hizali: frontend/src/lib/ai-analysis.ts icinde POSITIVE_TONE_FLOOR=85, CAUTION_TONE_FLOOR=65.",
+    "onay": 75,
+    "revizyon": 50
+  },
+
+  "kriter_eslesmeleri": {
+    "_not": "Yarisma Yoneticisi'nin arayuzden tanimladigi kriterleri (backend'de Criteria tablosu) olculebilir rubrik kalemlerine baglar. Solda backend'deki kriter adi, sagda karsilik gelen rubrik kalemi. Buraya YAZILMAYAN bir kriter icin sistem SAYI URETMEZ - 'hakem elle degerlendirmeli' olarak isaretlenip aciga cikarilir. Uydurma puan uretmek, puan uretmemekten daha kotudur; hakem hangi kriterin gercekten olculdugunu bilmek zorunda. Adlar backend/main.py seed_db()'deki Criteria kayitlarindan.",
+    "Technical Novelty": "Özgünlük",
+    "Experimental Rigour": "Sonuçlar ve İnceleme",
+    "Teknik Özgünlük": "Özgünlük",
+    "Deneysel Titizlik": "Sonuçlar ve İnceleme",
+    "_olculemeyenler_notu": "'Language & Template Compliance' bilerek buraya eklenmedi: o kriter Hasan'in ai-doc-analysis modulu tarafindan zaten ayri olarak olculuyor ve hakem panelinde 'languageTemplate' kartinda gosteriliyor - burada ikinci kez puanlanmasi cift sayim olurdu. 'Ethical & Data Privacy Considerations' ise metinden guvenilir sekilde olculemez (bir raporun 'KVKK' yazmasi, veri gizliligini gercekten ele aldigini kanitlamaz), bu yuzden bilincli olarak hakeme birakiliyor."
+  },
+
+  "benzerlik": {
+    "_not": "EN KRITIK TASARIM KARARI. Benzerlik puani, TF-IDF konusal benzerlikten DEGIL birebir kelime ortusmesinden hesaplaniyor. Neden: calibrate.py ile olctuk - birbirinden tamamen bagimsiz 34 gercek raporun TF-IDF kosinus benzerligi %11.9-%45.2 arasinda (medyan %20.1), cunku hepsi ayni sablonu ve ayni alan terminolojisini kullaniyor. Kosinus benzerligi intihal puani olarak kullanilsaydi frontend'in >35 'Yuksek risk' bandinda 34 gercek raporun bir kismi HAKSIZ YERE intihal isaretlenirdi. Ayni 34 raporun 8-kelimelik birebir ortusmesi ise %0.0-%7.9 (medyan %0.6) - yani frontend'in <=15 'Ozgun' bandinda rahatca kaliyor. Konusal benzerlik yine hesaplaniyor ama sadece hakeme BAGLAM olarak gosteriliyor, puani belirlemiyor.",
+    "ngram_kelime": 8,
+    "_ngram_kaynak": "8 kelime, tesadufi ortusme ile kasitli kopyayi ayirmaya yeten en kisa uzunluk: 34 gercek raporda tesadufi ortusmeyi %0.6 medyanda tutuyor.",
+    "gercek_raporlarda_gorulen_en_yuksek": 7.94,
+    "dikkat_esigi": 15,
+    "kritik_esigi": 35,
+    "_esik_kaynak": "frontend/src/lib/ai-analysis.ts: NEGATIVE_TONE_CEILING=15, NEGATIVE_CAUTION_CEILING=35. Benzerlik tek 'negatif polarite' kontrolu - DUSUK puan iyi sonuc demek.",
+    "raporlanacak_eslesme_sayisi": 3
+  },
+
+  "kategori": {
+    "_not": "Kategori uygunlugu, raporun BEYAN EDILEN kategorisine ait olup olmadigini olcer. Iki motor var: (1) ANTHROPIC_API_KEY varsa Claude API ile siniflandirma - diller arasi calisir, (2) anahtar yoksa anahtar kelime + TF-IDF karakter n-gram eslesmesi. Neden anahtar kelime listesi gerekiyor: backend'in seed kategorileri INGILIZCE ('Robotics & Automation'), raporlar ise TURKCE - duz kelime eslesmesi sifir sonuc verir. Kategoriler backend/main.py seed_db()'den, Turkce adlar frontend/src/lib/criteria-template.ts CATEGORY_OPTIONS'dan.",
+    "esikler": { "dikkat": 60, "kritik": 40 },
+    "anahtar_kelimeler": {
+      "Robotics & Automation": {
+        "turkce_ad": "Robotik ve Otomasyon",
+        "kelimeler": ["robot", "robotik", "otonom", "otomasyon", "insansiz", "iha", "drone", "dron", "eyleyici", "aktuator", "motor", "servo", "kinematik", "manipulator", "hava araci", "ucus", "gorev planlama", "yol planlama", "navigasyon", "mekanik", "gomulu", "sensor", "lidar", "guzergah"]
+      },
+      "AI & Machine Learning": {
+        "turkce_ad": "Yapay Zeka ve Makine Öğrenmesi",
+        "kelimeler": ["yapay zeka", "makine ogrenmesi", "derin ogrenme", "sinir agi", "noral", "egitim", "veri seti", "model", "siniflandirma", "nesne tespiti", "goruntu isleme", "bilgisayarli goru", "evrisimli", "cnn", "yolo", "transformer", "dogal dil", "katman", "hiperparametre", "epok", "kayip fonksiyonu", "dogruluk", "map", "iou", "etiketleme", "veri artirma", "asiri ogrenme", "cikarim"]
+      },
+      "Sustainability & Energy": {
+        "turkce_ad": "Sürdürülebilirlik ve Enerji",
+        "kelimeler": ["enerji", "surdurulebilir", "yenilenebilir", "gunes", "ruzgar", "karbon", "emisyon", "verimlilik", "batarya", "sarj", "guc tuketimi", "sebeke", "atik", "geri donusum", "iklim", "cevre", "termal", "yakit"]
+      },
+      "FinTech": {
+        "turkce_ad": "Finansal Teknolojiler",
+        "kelimeler": ["finans", "finansal", "odeme", "banka", "bankacilik", "kredi", "borsa", "yatirim", "portfoy", "blokzincir", "blockchain", "kripto", "islem", "risk skoru", "dolandiricilik", "sigorta", "muhasebe", "faiz", "butce"]
+      },
+      "HealthTech": {
+        "turkce_ad": "Sağlık Teknolojileri",
+        "kelimeler": ["saglik", "hasta", "hastane", "klinik", "tani", "teshis", "tedavi", "hekim", "doktor", "tibbi", "goruntuleme", "radyoloji", "mri", "tomografi", "ekg", "biyomedikal", "ilac", "semptom", "giyilebilir", "hemsire", "epikriz", "anatomi"]
+      },
+      "Game Design": {
+        "_not": "Ilk listede 'gorev', 'karakter', 'sahne', 'seviye', 'puan tablosu' de vardi; olcum sirasinda bunlarin havacilik raporlarinda da bolca gectigi (gorev planlama, karakter sayisi, sahne analizi) ve Oyun Tasarimi'ni 34 alakasiz raporda medyan 0.158 ile yanlislikla 2. siraya cikardigi goruldu. Genel Turkce kelimeler cikarilip yerine oyuna ozgu terimler konuldu - bu, 'rakip kategori cezasi' hesabini bozuyordu.",
+        "kelimeler": ["oyun", "oyuncu", "oynanis", "oynanabilirlik", "oyun motoru", "oyun mekanigi", "oyun ici", "unity", "unreal", "prosedurel uretim", "hikaye anlatimi", "vr", "sanal gerceklik", "artirilmis gerceklik", "grafik motoru", "animasyon", "skor tablosu", "envanter", "npc", "bolum tasarimi"]
+      }
+    }
+  },
+
+  "teknik_terimler": {
+    "_not": "'Algoritmalar ve Sistem Mimarisi' bolumunun teknik derinligini olcmek icin - bolumde KAC FARKLI teknik terim geciyor. Amac terimleri saymak degil, bolumun gercekten teknik icerik mi yoksa genel laf mi oldugunu ayirmak.",
+    "kelimeler": ["algoritma", "mimari", "model", "katman", "egitim", "veri seti", "optimizasyon", "hiperparametre", "epok", "ogrenme orani", "kayip", "dogruluk", "hassasiyet", "duyarlilik", "f1", "map", "iou", "evrisim", "havuzlama", "aktivasyon", "geri yayilim", "gradyan", "regularizasyon", "normalizasyon", "veri artirma", "cikarim", "gercek zamanli", "gecikme", "islem hacmi", "kuantalama", "budama", "aktarimli ogrenme", "onceden egitilmis", "capraz dogrulama", "karisiklik matrisi", "esik", "on isleme", "oznitelik", "gomme", "dikkat mekanizmasi", "tekrarlayan", "kodlayici", "kod cozucu", "yolo", "cnn", "rnn", "lstm", "transformer", "resnet", "unet", "gpu", "cuda", "tensor", "pytorch", "tensorflow", "opencv", "ros", "kalman", "filtre", "regresyon", "kumeleme", "pekistirmeli"]
+  },
+
+  "ozgunluk_ifadeleri": {
+    "_not": "'Ozgunluk' bolumunun gercekten ozgunluk ARGUMANI kurup kurmadigini olcer: literaturle karsilastirma, farklilik iddiasi, katki beyani. Bu ifadelerin hic gecmedigi bir 'Ozgunluk' bolumu genelde bolumu doldurmus ama ozgunluk anlatmamis oluyor.",
+    "kelimeler": ["ozgun", "ozgunluk", "yenilik", "yenilikci", "ilk kez", "farkli olarak", "farkliligi", "literaturde", "literatur", "mevcut cozum", "benzer calisma", "onceki calisma", "ayrisan", "ustunluk", "avantaj", "katki", "gelistirdigimiz", "gelistirilen yeni", "kendi", "tarafimizdan", "sunulan yaklasim", "onerilen yontem", "onerdigimiz", "aksine", "kiyasla", "gore daha", "karsilastirildiginda"]
+  }
+}
