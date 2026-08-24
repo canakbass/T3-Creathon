@@ -100,19 +100,23 @@ def check_template(text: str, rules: dict) -> dict:
     }
 
 
-def check_content(text: str, rules: dict) -> list:
-    """Metinde BULUNAN basliklarin (ya da esanlamlilarinin) altinda yeterli
-    icerik olup olmadigini kontrol eder (eksik basliklar zaten
-    check_template'te raporlaniyor, burada onlari tekrar saymiyoruz).
+def find_sections(text: str, rules: dict) -> dict:
+    """Rapor metnini zorunlu basliklara gore bolumlere ayirir.
+
+    Doner: {kanonik_baslik: bolum_metni}. Metinde hic bulunamayan basliklar
+    sozlukte yer almaz - onlar zaten check_template'te "eksik" olarak
+    raporlaniyor. Sozluk, basliklarin metindeki gercek sirasina gore dolu.
 
     Basligin ilk gectigi yeri degil SON gectigi yeri kullaniyoruz: gercek
     raporlarda 2. sayfa genelde "Icindekiler" oluyor ve tum basliklar orada
     bir kez daha (sayfa numarasiyla) geciyor. Ilk esleseni kullansaydik
     icindekiler satirini "bolum icerigi" sanip yanlis olculer.
+
+    Bu fonksiyon hem check_content (bolum uzunlugu kontrolu) hem de
+    ai-scoring modulu (kriter bazli puanlama) tarafindan kullaniliyor -
+    bolumleme mantigi tek yerde dursun diye ayri fonksiyona alindi.
     """
     normalized_text = _turkish_casefold(text)
-    varsayilan_min = rules.get("min_bolum_karakter", 30)
-    ozel_min = rules.get("min_bolum_karakter_override", {})
     esanlamli = rules.get("esanlamli_basliklar", {})
 
     positions = []
@@ -123,14 +127,27 @@ def check_content(text: str, rules: dict) -> list:
             positions.append((idx, eslesen_uzunluk, baslik))
     positions.sort()
 
-    yetersiz = []
+    bolumler = {}
     for i, (idx, eslesen_uzunluk, baslik) in enumerate(positions):
-        min_karakter = ozel_min.get(baslik, varsayilan_min)
         bolum_baslangic = idx + eslesen_uzunluk
         bolum_bitis = positions[i + 1][0] if i + 1 < len(positions) else len(text)
-        if bolum_bitis - bolum_baslangic < min_karakter:
-            yetersiz.append(baslik)
-    return yetersiz
+        bolumler[baslik] = text[bolum_baslangic:bolum_bitis]
+    return bolumler
+
+
+def check_content(text: str, rules: dict) -> list:
+    """Metinde BULUNAN basliklarin (ya da esanlamlilarinin) altinda yeterli
+    icerik olup olmadigini kontrol eder (eksik basliklar zaten
+    check_template'te raporlaniyor, burada onlari tekrar saymiyoruz).
+    """
+    varsayilan_min = rules.get("min_bolum_karakter", 30)
+    ozel_min = rules.get("min_bolum_karakter_override", {})
+
+    return [
+        baslik
+        for baslik, bolum_metni in find_sections(text, rules).items()
+        if len(bolum_metni) < ozel_min.get(baslik, varsayilan_min)
+    ]
 
 
 def analyze_document(pdf_path: str, rules: dict) -> dict:
