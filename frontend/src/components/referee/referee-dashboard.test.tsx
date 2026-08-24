@@ -32,16 +32,64 @@ describe("RefereeDashboard", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 
-  it("shows loading skeletons before the simulated fetch resolves, then renders the list", async () => {
-    render(<RefereeDashboard loadingDelayMs={10} />);
+  it("shows loading skeletons until the API responds, then renders the list", async () => {
+    // Pano artik GERCEK API'yi cagiriyor (eskiden setTimeout ile sahte bir
+    // gecikme vardi). Rapor listesi ve kategori listesi paralel isteniyor.
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const payload = url.includes("/api/categories")
+        ? [{ id: "cat-2", name: "Yapay Zeka ve Makine Öğrenmesi", description: null }]
+        : [
+            {
+              id: "RPT-2026-900001",
+              project_name: "İHA Nesne Tespiti",
+              category_id: "cat-2",
+              status: "analyzed",
+              file_path: "uploads/RPT-2026-900001.pdf",
+              submitted_by_id: "user-1",
+              submission_date: "2026-08-24T10:00:00",
+              ai_analysis: null,
+              final_decision: null,
+            },
+          ];
+      return { ok: true, status: 200, json: async () => payload };
+    }) as unknown as typeof fetch;
 
-    expect(screen.getByTestId("report-list-skeleton")).toBeInTheDocument();
-    expect(screen.getByTestId("report-detail-skeleton")).toBeInTheDocument();
-    expect(screen.queryByRole("listbox", { name: /değerlendirme raporları/i })).not.toBeInTheDocument();
+    try {
+      render(<RefereeDashboard />);
 
-    const list = await screen.findByRole("listbox", { name: /değerlendirme raporları/i });
-    expect(within(list).getAllByRole("option").length).toBeGreaterThan(0);
-    expect(screen.queryByTestId("report-list-skeleton")).not.toBeInTheDocument();
+      expect(screen.getByTestId("report-list-skeleton")).toBeInTheDocument();
+      expect(screen.getByTestId("report-detail-skeleton")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("listbox", { name: /değerlendirme raporları/i }),
+      ).not.toBeInTheDocument();
+
+      const list = await screen.findByRole("listbox", { name: /değerlendirme raporları/i });
+      expect(within(list).getAllByRole("option").length).toBeGreaterThan(0);
+      expect(screen.queryByTestId("report-list-skeleton")).not.toBeInTheDocument();
+      // Kategori kimligi degil ADI gosterilmeli (esleyici cevirisi calisiyor mu).
+      expect(list).toHaveTextContent("Yapay Zeka ve Makine Öğrenmesi");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it("surfaces a readable error when the backend is unreachable", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    }) as unknown as typeof fetch;
+
+    try {
+      render(<RefereeDashboard />);
+      const alert = await screen.findByTestId("reports-error");
+      expect(alert).toHaveTextContent(/backend'e ulaşılamadı/i);
+      // Iskelet sonsuza kadar donmemeli, aksi halde hata mesaji gorunmezdi.
+      expect(screen.queryByTestId("report-list-skeleton")).not.toBeInTheDocument();
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 
   it("updates the detail view to show the selected report when a row is clicked", async () => {

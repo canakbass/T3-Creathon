@@ -17,14 +17,24 @@ import {
 interface FinalDecisionFormProps {
   reportId: string;
   suggestion: AiSuggestion;
-  /** Mock persistence hook — receives the referee's final, authoritative decision. */
-  onSubmitDecision?: (submission: FinalDecisionSubmission) => void;
+  /**
+   * Hakemin nihai kararını kalıcı hale getirir.
+   *
+   * Promise DÖNEBİLİR ve dönerse `await` edilir: reddedilirse "kaydedildi"
+   * bandı GÖSTERİLMEZ. Önceden bu geri çağrım senkron çağrılıyor ve başarı
+   * durumu ondan ÖNCE kuruluyordu — yani kayıt başarısız olsa bile hakem
+   * kararının kaydedildiğini sanıyordu.
+   */
+  onSubmitDecision?: (submission: FinalDecisionSubmission) => void | Promise<void>;
+  /** Bu rapor için karar zaten verilmişse form salt-okunur gösterilir. */
+  decisionAlreadySubmitted?: boolean;
 }
 
 export function FinalDecisionForm({
   reportId,
   suggestion,
   onSubmitDecision,
+  decisionAlreadySubmitted = false,
 }: FinalDecisionFormProps) {
   const [submitted, setSubmitted] = useState<FinalDecisionSubmission | null>(null);
   const headingId = useId();
@@ -52,15 +62,23 @@ export function FinalDecisionForm({
   const overridesAiSuggestion =
     Number(currentScore) !== suggestion.score || currentOutcome !== suggestion.outcome;
 
-  function onValid(values: FinalDecisionFormValues) {
+  async function onValid(values: FinalDecisionFormValues) {
     const submission: FinalDecisionSubmission = {
       ...values,
       reportId,
       overridesAiSuggestion:
         values.finalScore !== suggestion.score || values.outcome !== suggestion.outcome,
     };
+
+    // Kayit BASARILI olduktan SONRA basari bandini gosteriyoruz.
+    // Geri cagrim reddedilirse hata yukaridaki kap bilesende gosteriliyor
+    // ve form doldurulmus halde kaliyor, boylece hakem tekrar deneyebilir.
+    try {
+      await onSubmitDecision?.(submission);
+    } catch {
+      return;
+    }
     setSubmitted(submission);
-    onSubmitDecision?.(submission);
   }
 
   return (
@@ -310,10 +328,14 @@ export function FinalDecisionForm({
             </button>
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || decisionAlreadySubmitted}
               className="rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Nihai kararı gönder
+              {decisionAlreadySubmitted
+                ? "Karar zaten verildi"
+                : isSubmitting
+                  ? "Gönderiliyor…"
+                  : "Nihai kararı gönder"}
             </button>
           </div>
         </form>

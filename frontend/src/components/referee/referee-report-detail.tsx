@@ -12,13 +12,17 @@ import { StatusBadge } from "./status-badge";
 interface RefereeReportDetailProps {
   report: EvaluationReport;
   analysis: AiAnalysis | null;
-  onSubmitDecision?: (submission: FinalDecisionSubmission) => void;
+  /** Promise dönebilir; reddedilirse form "kaydedildi" göstermez. */
+  onSubmitDecision?: (submission: FinalDecisionSubmission) => void | Promise<void>;
+  /** Bu rapora daha önce karar verilmişse form kilitlenir. */
+  decisionAlreadySubmitted?: boolean;
 }
 
 export function RefereeReportDetail({
   report,
   analysis,
   onSubmitDecision,
+  decisionAlreadySubmitted,
 }: RefereeReportDetailProps) {
   return (
     <div className="flex flex-col gap-6" data-testid="referee-report-detail">
@@ -75,6 +79,7 @@ export function RefereeReportDetail({
             reportId={report.reportId}
             suggestion={analysis.suggestion}
             onSubmitDecision={onSubmitDecision}
+            decisionAlreadySubmitted={decisionAlreadySubmitted}
           />
         </>
       ) : (
