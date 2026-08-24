@@ -16,11 +16,82 @@ UPLOAD_DIR = "uploads"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
+def _attach_analysis_results(report: models.Report) -> models.Report:
+    """AiAnalysis kaydinin duz kolonlarini, API'nin dondugu ic ice `results`
+    sozlugune cevirip nesneye ekler.
+
+    NEDEN GEREKLI: schemas.AiAnalysisResponse `results: Dict[str, AiCheckResult]`
+    alanini ZORUNLU tutuyor, ama models.AiAnalysis'te `results` diye bir
+    kolon yok - veri tabaninda her kontrol dort ayri duz kolonda duruyor
+    (language_template_score, ..._summary, ..._findings). Yani bu alanin
+    her yanit oncesi elle uretilmesi sart.
+
+    ONCEDEN NE KIRIKTI: bu donusum yalnizca get_report icinde yapiliyordu.
+    list_reports (GET /api/reports) ayni ReportResponse semasini kullaniyor
+    ama donusumu yapmiyordu; dolayisiyla veri tabaninda analiz edilmis TEK
+    BIR rapor olur olmaz endpoint ResponseValidationError ile HTTP 500
+    veriyordu ("Field required: ai_analysis.results"). Hakem panosunun ana
+    listesi tam da bu endpoint'i kullaniyor. Mevcut testler yakalamamisti
+    cunku analiz sonrasi liste endpoint'ini hic cagirmiyorlardi.
+
+    Anahtar adlari camelCase: frontend/src/lib/ai-analysis.ts icindeki
+    CHECK_KEYS ile birebir ayni olmali.
+    """
+    analysis = report.ai_analysis
+    if not analysis:
+        return report
+
+    def _findings(deger):
+        if not deger:
+            return []
+        try:
+            return json.loads(deger)
+        except (json.JSONDecodeError, TypeError):
+            # Bozuk JSON yuzunden tum endpoint dusmesin - hakem en azindan
+            # puani ve ozeti gorsun.
+            return ["Bulgular okunamadi (veri tabanindaki kayit bozuk)."]
+
+    setattr(
+        analysis,
+        "results",
+        {
+            "languageTemplate": {
+                "score": analysis.language_template_score,
+                "summary": analysis.language_template_summary,
+                "findings": _findings(analysis.language_template_findings),
+            },
+            "contentHeading": {
+                "score": analysis.content_heading_score,
+                "summary": analysis.content_heading_summary,
+                "findings": _findings(analysis.content_heading_findings),
+            },
+            "categoryMatch": {
+                "score": analysis.category_match_score,
+                "summary": analysis.category_match_summary,
+                "findings": _findings(analysis.category_match_findings),
+            },
+            "similarity": {
+                "score": analysis.similarity_score,
+                "summary": analysis.similarity_summary,
+                "findings": _findings(analysis.similarity_findings),
+            },
+        },
+    )
+    return report
+
+
 def run_background_analysis(report_id: str, file_path: str, db: Session):
     try:
         # Get category information
         categories = db.query(models.Category).all()
-        categories_dict = [{"id": c.id, "name": c.name} for c in categories]
+        # description de geciyoruz: docs/scoring-rules.json'da anahtar kelime
+        # tanimi olmayan (Yarisma Yoneticisi'nin sonradan ekledigi) bir
+        # kategori icin ai-scoring, kategori adi+aciklamasi uzerinden
+        # karakter n-gram benzerligine dusuyor - aciklama olmadan o yedek
+        # yontemin elinde neredeyse hic sinyal kalmaz.
+        categories_dict = [
+            {"id": c.id, "name": c.name, "description": c.description} for c in categories
+        ]
         
         # Get existing report files (for similarity checking)
         other_reports = db.query(models.Report).filter(models.Report.id != report_id).all()
@@ -31,12 +102,17 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
         criteria = db.query(models.Criteria).filter(models.Criteria.category_id == report.category_id).all()
         criteria_dict = [{"id": cr.id, "title": cr.title, "max_score": cr.max_score} for cr in criteria]
         
-        # Run AI analysis
+        # Run AI analysis.
+        # declared_category_id: yarismacinin yukleme sirasinda sectigi
+        # kategori. Bu olmadan kategori kontrolu yalnizca "en uygun kategori
+        # hangisi" diyebiliyordu; asil sorulmasi gereken soru "rapor BEYAN
+        # EDILEN kategoriye ait mi" oldugu icin bu bilgiyi da geciyoruz.
         analysis_data = ai.run_full_analysis(
             file_path=file_path,
             db_categories=categories_dict,
             existing_files=existing_paths,
-            criteria_list=criteria_dict
+            criteria_list=criteria_dict,
+            declared_category_id=report.category_id
         )
         
         # Save analysis results
@@ -145,8 +221,11 @@ def list_reports(
         
     if status:
         query = query.filter(models.Report.status == status)
-        
-    return query.all()
+
+    # ai_analysis.results her yanit oncesi uretilmek zorunda (bkz.
+    # _attach_analysis_results). Bu eksik oldugu icin endpoint, analiz
+    # edilmis ilk rapordan sonra HTTP 500 veriyordu.
+    return [_attach_analysis_results(r) for r in query.all()]
 
 
 @router.get("/{report_id}", response_model=schemas.ReportResponse)
@@ -166,38 +245,9 @@ def get_report(
             detail="Access denied to this report."
         )
         
-    # Before returning, format AI findings lists from serialized JSON string in db to python list
-    # The Pydantic model (schemas.AiAnalysisResponse) expect results to contain findings List[str]
-    # Pydantic handles validation if we inject it
-    if report.ai_analysis:
-        analysis = report.ai_analysis
-        # Construct dynamic results dict for API
-        results = {
-            "languageTemplate": {
-                "score": analysis.language_template_score,
-                "summary": analysis.language_template_summary,
-                "findings": json.loads(analysis.language_template_findings) if analysis.language_template_findings else []
-            },
-            "contentHeading": {
-                "score": analysis.content_heading_score,
-                "summary": analysis.content_heading_summary,
-                "findings": json.loads(analysis.content_heading_findings) if analysis.content_heading_findings else []
-            },
-            "categoryMatch": {
-                "score": analysis.category_match_score,
-                "summary": analysis.category_match_summary,
-                "findings": json.loads(analysis.category_match_findings) if analysis.category_match_findings else []
-            },
-            "similarity": {
-                "score": analysis.similarity_score,
-                "summary": analysis.similarity_summary,
-                "findings": json.loads(analysis.similarity_findings) if analysis.similarity_findings else []
-            }
-        }
-        # Attach dynamic results field for schema serialization
-        setattr(report.ai_analysis, 'results', results)
-        
-    return report
+    # ai_analysis.results semada zorunlu ama veri tabaninda kolon degil -
+    # yanit oncesi duz kolonlardan uretiliyor (bkz. _attach_analysis_results).
+    return _attach_analysis_results(report)
 
 
 @router.post("/{report_id}/decision", response_model=schemas.FinalDecisionResponse)
