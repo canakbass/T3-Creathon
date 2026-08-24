@@ -133,6 +133,35 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 }
 
 /**
+ * İkili (binary) içerik indirir — rapor PDF'leri için.
+ *
+ * `apiFetch` yanıtı JSON olarak çözdüğü için ayrı bir fonksiyon gerekiyor.
+ * Aynı token/hata yolunu paylaşır.
+ */
+export async function apiFetchBlob(
+  path: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  const token = tokenReader();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { headers, signal: options.signal });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    throw new NetworkError(cause);
+  }
+
+  if (response.status === 401) onUnauthorized();
+  if (!response.ok) {
+    throw new ApiError(response.status, await readErrorDetail(response));
+  }
+  return response.blob();
+}
+
+/**
  * FastAPI hatayı `{"detail": "..."}` olarak döndürür, ama doğrulama
  * hatalarında `detail` bir DİZİ olur. Ayrıca 500'lerde gövde hiç JSON
  * olmayabilir. Üçünü de tek okunabilir metne çeviriyoruz.

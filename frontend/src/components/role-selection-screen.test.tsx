@@ -2,67 +2,82 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RoleSelectionScreen } from "./role-selection-screen";
 import { useAuthStore } from "@/store/auth-store";
-import { ROLE_DEFINITIONS, ROLES } from "@/lib/roles";
+import { ROLE_DEFINITIONS } from "@/lib/roles";
 
 const pushMock = jest.fn();
 
 jest.mock("next/navigation", () => ({
-  useRouter: () => ({
-    push: pushMock,
-    replace: jest.fn(),
-  }),
+  useRouter: () => ({ push: pushMock, replace: jest.fn() }),
 }));
 
 /**
- * Giris ekrani artik GERCEK bir JWT girisi yapiyor: rol kartina tiklamak,
- * backend'in seed ettigi demo hesabiyla /api/auth/login cagiriyor ve
- * ardindan rolu /api/auth/me'den okuyor. Bu yuzden testler fetch'i
- * taklit etmek zorunda - onceden hicbir ag cagrisi yoktu.
- */
-const ROLE_EMAILS: Record<string, string> = {
-  COMPETITION_MANAGER: "manager@teknofest.org",
-  REFEREE: "referee@teknofest.org",
-  COMPETITOR: "competitor@teknofest.org",
-  EVALUATION_MANAGER: "evaluator@teknofest.org",
-};
-
-/**
- * jsdom ortaminda `Response` global'i guvenilir sekilde bulunmuyor, bu
- * yuzden istemcinin GERCEKTEN kullandigi yuzeyi (`ok`, `status`, `json()`)
- * tasiyan sade nesneler donduruyoruz.
+ * Bu ekran artik GERCEK kimlik dogrulama yapiyor:
+ *   e-posta + sifre -> /api/auth/login -> (tek rol) panel
+ *                                      -> (cok rol) rol secimi -> /select-role
+ * Onceki hali rol kartina tiklayinca SIFRESIZ giris yapiyordu; o davranis
+ * kasitli olarak kaldirildi, testler de yeniden yazildi.
+ *
+ * jsdom'da `Response` global'i guvenilir olmadigi icin taklit yanitlar,
+ * istemcinin gercekten kullandigi yuzeyi (ok/status/json) tasiyan sade
+ * nesneler.
  */
 function jsonResponse(status: number, payload: unknown) {
+  return { ok: status >= 200 && status < 300, status, json: async () => payload };
+}
+
+function kullanici(email: string, roles: string[], activeRole: string | null) {
   return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => payload,
+    access_token: "test-jwt",
+    token_type: "bearer",
+    roles,
+    active_role: activeRole,
+    user: {
+      id: "user-1",
+      email,
+      full_name: "Test Kişi",
+      created_at: "2026-08-24T00:00:00",
+      roles,
+      role: activeRole,
+    },
   };
 }
 
-/** login -> /me ikilisini karsilayan bir fetch taklidi kurar. */
-function mockAuthFetch(options: { role?: string; loginStatus?: number } = {}) {
-  const { role = "REFEREE", loginStatus = 200 } = options;
+interface MockAyar {
+  roles?: string[];
+  loginStatus?: number;
+  registerStatus?: number;
+}
 
-  // `init` kullanilmasa da imzada yer almali: testler gonderilen govdeyi
-  // (mock.calls[i][1].body) inceliyor ve tip bilgisi oradan geliyor.
+function mockFetch({ roles = ["REFEREE"], loginStatus = 200, registerStatus = 201 }: MockAyar = {}) {
+  const cokRol = roles.length > 1;
   const fetchMock = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    void init;
-    const url = typeof input === "string" ? input : input.toString();
+    const url = String(input);
 
     if (url.endsWith("/api/auth/login")) {
       if (loginStatus !== 200) {
-        return jsonResponse(loginStatus, { detail: "Incorrect email or password" });
+        return jsonResponse(loginStatus, { detail: "E-posta veya sifre hatali" });
       }
-      return jsonResponse(200, { access_token: "test-jwt-token", token_type: "bearer" });
+      // Cok rollu kullanicida active_role null gelir -> rol secimi gerekir.
+      return jsonResponse(200, kullanici("test@ornek.org", roles, cokRol ? null : roles[0]));
     }
 
-    if (url.endsWith("/api/auth/me")) {
-      return jsonResponse(200, {
+    if (url.endsWith("/api/auth/register")) {
+      if (registerStatus !== 201) {
+        return jsonResponse(registerStatus, { detail: "Bu e-posta adresi zaten kayitli." });
+      }
+      return jsonResponse(201, {
         id: "user-1",
-        email: ROLE_EMAILS[role] ?? "user@teknofest.org",
-        role,
+        email: "test@ornek.org",
+        full_name: null,
         created_at: "2026-08-24T00:00:00",
+        roles,
+        role: roles[0],
       });
+    }
+
+    if (url.endsWith("/api/auth/select-role")) {
+      const secilen = JSON.parse(String(init?.body ?? "{}")).role as string;
+      return jsonResponse(200, kullanici("test@ornek.org", roles, secilen));
     }
 
     throw new Error(`Beklenmeyen istek: ${url}`);
@@ -72,79 +87,114 @@ function mockAuthFetch(options: { role?: string; loginStatus?: number } = {}) {
   return fetchMock;
 }
 
+async function girisYap(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(screen.getByLabelText(/e-posta/i), "test@ornek.org");
+  await user.type(screen.getByLabelText(/şifre/i), "sifre12345");
+  await user.click(screen.getByRole("button", { name: /^giriş yap$/i }));
+}
+
 describe("RoleSelectionScreen", () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
     pushMock.mockClear();
-    useAuthStore.setState({ role: null, token: null, email: null, userId: null });
+    useAuthStore.setState({
+      role: null,
+      roles: [],
+      token: null,
+      email: null,
+      fullName: null,
+      userId: null,
+    });
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
   });
 
-  it("renders a selectable card for every role", () => {
-    mockAuthFetch();
+  it("opens on a login form, not a passwordless role picker", () => {
+    mockFetch();
     render(<RoleSelectionScreen />);
 
-    for (const role of ROLES) {
-      const card = screen.getByTestId(`role-card-${role}`);
-      expect(card).toBeInTheDocument();
-      expect(card).toHaveTextContent(ROLE_DEFINITIONS[role].label);
-    }
+    expect(screen.getByTestId("login-form")).toBeInTheDocument();
+    expect(screen.getByLabelText(/e-posta/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/şifre/i)).toBeInTheDocument();
+    // Sifre girmeden rol secip girebilme YOLU KAPALI olmali.
+    expect(screen.queryByTestId("role-card-REFEREE")).not.toBeInTheDocument();
   });
 
-  it("exposes an accessible radiogroup of exactly four roles", () => {
-    mockAuthFetch();
-    render(<RoleSelectionScreen />);
-
-    const group = screen.getByRole("radiogroup", { name: /rolünüzü seçin/i });
-    expect(group).toBeInTheDocument();
-
-    const options = screen.getAllByRole("radio");
-    expect(options).toHaveLength(4);
-  });
-
-  it.each(ROLES)(
-    "logs in with the %s demo account and navigates to the dashboard the server reports",
-    async (role) => {
-      const fetchMock = mockAuthFetch({ role });
-      const user = userEvent.setup();
-      render(<RoleSelectionScreen />);
-
-      await user.click(screen.getByTestId(`role-card-${role}`));
-
-      await waitFor(() => {
-        expect(pushMock).toHaveBeenCalledWith(ROLE_DEFINITIONS[role].dashboardPath);
-      });
-
-      // Gercek bir giris yapildi: token saklandi ve rol sunucudan geldi.
-      expect(useAuthStore.getState().token).toBe("test-jwt-token");
-      expect(useAuthStore.getState().role).toBe(role);
-      expect(useAuthStore.getState().email).toBe(ROLE_EMAILS[role]);
-
-      // Login govdesi form-encoded olmali ve e-posta alani `username`
-      // adiyla gitmeli (backend OAuth2PasswordRequestForm kullaniyor).
-      const loginCall = fetchMock.mock.calls.find(([url]) =>
-        String(url).endsWith("/api/auth/login"),
-      );
-      expect(loginCall).toBeDefined();
-      const body = loginCall?.[1]?.body as URLSearchParams;
-      expect(body.get("username")).toBe(ROLE_EMAILS[role]);
-      expect(body.get("password")).toBe("password123");
-    },
-  );
-
-  it("shows an error and does not navigate when the credentials are rejected", async () => {
-    mockAuthFetch({ loginStatus: 401 });
+  it("signs a single-role user straight into their dashboard", async () => {
+    const fetchMock = mockFetch({ roles: ["REFEREE"] });
     const user = userEvent.setup();
     render(<RoleSelectionScreen />);
 
-    await user.click(screen.getByTestId("role-card-REFEREE"));
+    await girisYap(user);
 
-    const alert = await screen.findByTestId("login-error");
-    expect(alert).toHaveTextContent(/e-posta veya şifre hatalı/i);
+    await waitFor(() => {
+      expect(pushMock).toHaveBeenCalledWith(ROLE_DEFINITIONS.REFEREE.dashboardPath);
+    });
+    expect(useAuthStore.getState().token).toBe("test-jwt");
+    expect(useAuthStore.getState().role).toBe("REFEREE");
+
+    // Login govdesi form-encoded olmali ve e-posta `username` adiyla gitmeli
+    // (backend OAuth2PasswordRequestForm kullaniyor; JSON gonderilse 422).
+    const call = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/api/auth/login"));
+    const body = call?.[1]?.body as URLSearchParams;
+    expect(body.get("username")).toBe("test@ornek.org");
+    expect(body.get("password")).toBe("sifre12345");
+  });
+
+  it("asks a multi-role user to choose a role before entering", async () => {
+    mockFetch({ roles: ["REFEREE", "COMPETITOR", "COMPETITION_MANAGER"] });
+    const user = userEvent.setup();
+    render(<RoleSelectionScreen />);
+
+    await girisYap(user);
+
+    // Rol secilmeden HICBIR panele gidilmemeli.
+    const group = await screen.findByRole("radiogroup", { name: /rolünüzü seçin/i });
+    expect(group).toBeInTheDocument();
+    expect(pushMock).not.toHaveBeenCalled();
+
+    // Yalnizca kullanicinin GERCEKTEN sahip oldugu roller gosterilmeli.
+    expect(screen.getByTestId("role-card-REFEREE")).toBeInTheDocument();
+    expect(screen.getByTestId("role-card-COMPETITOR")).toBeInTheDocument();
+    expect(screen.queryByTestId("role-card-EVALUATION_MANAGER")).not.toBeInTheDocument();
+  });
+
+  it("requests a role-scoped token from the server when a role is chosen", async () => {
+    const fetchMock = mockFetch({ roles: ["REFEREE", "COMPETITOR"] });
+    const user = userEvent.setup();
+    render(<RoleSelectionScreen />);
+
+    await girisYap(user);
+    await user.click(await screen.findByTestId("role-card-COMPETITOR"));
+
+    await waitFor(() => {
+      expect(pushMock).toHaveBeenCalledWith(ROLE_DEFINITIONS.COMPETITOR.dashboardPath);
+    });
+    expect(useAuthStore.getState().role).toBe("COMPETITOR");
+    // Her iki rol de saklanmali - panelde rol degistirme icin gerekli.
+    expect(useAuthStore.getState().roles).toEqual(
+      expect.arrayContaining(["REFEREE", "COMPETITOR"]),
+    );
+
+    // Rol secimi SUNUCUYA sorulmali; arayuz kendi basina rol atayamaz.
+    const call = fetchMock.mock.calls.find(([u]) =>
+      String(u).endsWith("/api/auth/select-role"),
+    );
+    expect(call).toBeDefined();
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ role: "COMPETITOR" });
+  });
+
+  it("shows an error and does not navigate when the credentials are rejected", async () => {
+    mockFetch({ loginStatus: 401 });
+    const user = userEvent.setup();
+    render(<RoleSelectionScreen />);
+
+    await girisYap(user);
+
+    expect(await screen.findByTestId("login-error")).toBeInTheDocument();
     expect(pushMock).not.toHaveBeenCalled();
     expect(useAuthStore.getState().token).toBeNull();
   });
@@ -153,37 +203,81 @@ describe("RoleSelectionScreen", () => {
     global.fetch = jest.fn(async () => {
       throw new TypeError("Failed to fetch");
     }) as unknown as typeof fetch;
-
     const user = userEvent.setup();
     render(<RoleSelectionScreen />);
 
-    await user.click(screen.getByTestId("role-card-REFEREE"));
+    await girisYap(user);
 
-    const alert = await screen.findByTestId("login-error");
-    expect(alert).toHaveTextContent(/backend'e ulaşılamadı/i);
+    expect(await screen.findByTestId("login-error")).toHaveTextContent(
+      /backend'e ulaşılamadı/i,
+    );
     expect(pushMock).not.toHaveBeenCalled();
   });
 
-  it("lets a user sign in with their own credentials instead of a demo account", async () => {
-    const fetchMock = mockAuthFetch({ role: "COMPETITOR" });
+  it("registers a new account with the selected roles and signs in", async () => {
+    const fetchMock = mockFetch({ roles: ["COMPETITOR"] });
     const user = userEvent.setup();
     render(<RoleSelectionScreen />);
 
-    await user.click(screen.getByRole("button", { name: /farklı bir hesapla/i }));
+    await user.click(screen.getByRole("button", { name: /kaydolun/i }));
+    expect(screen.getByTestId("register-form")).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText(/e-posta/i), "kendi@ornek.org");
-    await user.type(screen.getByLabelText(/şifre/i), "gizli-sifre");
-    await user.click(screen.getByRole("button", { name: /^giriş yap$/i }));
+    await user.type(screen.getByLabelText(/e-posta/i), "test@ornek.org");
+    await user.type(screen.getByLabelText(/şifre/i), "sifre12345");
+    await user.click(screen.getByRole("button", { name: /^kaydol$/i }));
 
     await waitFor(() => {
       expect(pushMock).toHaveBeenCalledWith(ROLE_DEFINITIONS.COMPETITOR.dashboardPath);
     });
 
-    const loginCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith("/api/auth/login"),
-    );
-    const body = loginCall?.[1]?.body as URLSearchParams;
-    expect(body.get("username")).toBe("kendi@ornek.org");
-    expect(body.get("password")).toBe("gizli-sifre");
+    const call = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/api/auth/register"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(String(call?.[1]?.body)).roles).toEqual(["COMPETITOR"]);
+  });
+
+  it("lets a new account request more than one role", async () => {
+    const fetchMock = mockFetch({ roles: ["COMPETITOR", "REFEREE"] });
+    const user = userEvent.setup();
+    render(<RoleSelectionScreen />);
+
+    await user.click(screen.getByRole("button", { name: /kaydolun/i }));
+    await user.click(screen.getByTestId("register-role-REFEREE"));
+    await user.type(screen.getByLabelText(/e-posta/i), "test@ornek.org");
+    await user.type(screen.getByLabelText(/şifre/i), "sifre12345");
+    await user.click(screen.getByRole("button", { name: /^kaydol$/i }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([u]) =>
+        String(u).endsWith("/api/auth/register"),
+      );
+      expect(JSON.parse(String(call?.[1]?.body)).roles).toEqual(
+        expect.arrayContaining(["COMPETITOR", "REFEREE"]),
+      );
+    });
+  });
+
+  it("surfaces the backend message when the e-mail is already registered", async () => {
+    mockFetch({ registerStatus: 400 });
+    const user = userEvent.setup();
+    render(<RoleSelectionScreen />);
+
+    await user.click(screen.getByRole("button", { name: /kaydolun/i }));
+    await user.type(screen.getByLabelText(/e-posta/i), "test@ornek.org");
+    await user.type(screen.getByLabelText(/şifre/i), "sifre12345");
+    await user.click(screen.getByRole("button", { name: /^kaydol$/i }));
+
+    expect(await screen.findByTestId("login-error")).toHaveTextContent(/zaten kayitli/i);
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it("fills the multi-role test account from the demo helper", async () => {
+    mockFetch();
+    const user = userEvent.setup();
+    render(<RoleSelectionScreen />);
+
+    await user.click(screen.getByRole("button", { name: /test hesabını doldur/i }));
+
+    expect(screen.getByLabelText(/e-posta/i)).toHaveValue("asdfghjkl@gmail.com");
+    expect(screen.getByLabelText(/şifre/i)).toHaveValue("asdfghjkl");
   });
 });

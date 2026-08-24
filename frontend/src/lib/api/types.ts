@@ -8,19 +8,84 @@
  * Kaynak: backend/app/schemas.py ve backend/app/routes/*.py
  */
 
-/** POST /api/auth/login yanıtı (schemas.Token) */
-export interface WireToken {
-  access_token: string;
-  token_type: string;
-}
-
 /** GET /api/auth/me yanıtı (schemas.UserResponse) */
 export interface WireUser {
   id: string;
   email: string;
-  /** ROLES ile aynı değerler: COMPETITION_MANAGER | REFEREE | COMPETITOR | EVALUATION_MANAGER */
-  role: string;
+  full_name: string | null;
   created_at: string;
+  /** Kullanıcının sahip olduğu TÜM roller. */
+  roles: string[];
+  /** Aktif rol (yoksa ilk rol). Tekil rol bekleyen eski kod için. */
+  role: string | null;
+}
+
+/**
+ * POST /api/auth/login ve /api/auth/select-role yanıtı (schemas.LoginResponse)
+ *
+ * `active_role` null ise kullanıcının birden fazla rolü var ve henüz
+ * seçmemiş — arayüz rol seçim ekranı göstermeli.
+ */
+export interface WireLoginResponse {
+  access_token: string;
+  token_type: string;
+  roles: string[];
+  active_role: string | null;
+  user: WireUser;
+}
+
+/** Yarışmanın değerlendirme kriteri (ağırlığıyla). */
+export interface WireCriterion {
+  id: string;
+  title: string;
+  description: string | null;
+  weight: number;
+  display_order: number;
+}
+
+/** GET /api/competitions yanıt öğesi (schemas.CompetitionResponse) */
+export interface WireCompetition {
+  id: string;
+  name: string;
+  description: string | null;
+  category_id: string;
+  category_name: string | null;
+  /** draft | open | closed | evaluating | completed */
+  status: string;
+  submission_deadline: string | null;
+  created_at: string;
+  accepted_languages: string[];
+  required_headings: string[];
+  heading_synonyms: Record<string, string[]>;
+  min_pages: number | null;
+  max_pages: number | null;
+  min_section_chars: number | null;
+  criteria: WireCriterion[];
+  referee_count: number;
+  report_count: number;
+}
+
+/** GET /api/assignments/referees yanıt öğesi */
+export interface WireReferee {
+  id: string;
+  email: string;
+  full_name: string | null;
+  assigned_count: number;
+}
+
+/** POST /api/assignments/competitions/{id}/auto-assign yanıtı */
+export interface WireAutoAssignResult {
+  assigned: number;
+  assignments: { report_id: string; referee_id: string; referee_email: string }[];
+  load: { referee_id: string; email: string; assigned_count: number }[];
+}
+
+/** POST /api/reports/{id}/rationale-draft yanıtı */
+export interface WireRationaleDraft {
+  draft: string;
+  notice: string;
+  suggested_score: number;
+  suggested_outcome: string;
 }
 
 /** GET /api/categories yanıt öğesi (schemas.CategoryResponse) */

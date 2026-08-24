@@ -9,7 +9,7 @@
 import type { AiAnalysis } from "@/lib/ai-analysis";
 import type { DecisionOutcome } from "@/lib/final-decision";
 import type { EvaluationReport } from "@/lib/mock-reports";
-import { apiFetch, ApiError } from "./client";
+import { apiFetch, apiFetchBlob, ApiError } from "./client";
 import {
   buildCategoryNameMap,
   toAiAnalysis,
@@ -18,11 +18,15 @@ import {
   type CategoryNameMap,
 } from "./mappers";
 import type {
+  WireAutoAssignResult,
   WireCategory,
+  WireCompetition,
   WireDashboardStats,
   WireFinalDecision,
+  WireLoginResponse,
+  WireRationaleDraft,
+  WireReferee,
   WireReport,
-  WireToken,
   WireUser,
 } from "./types";
 
@@ -31,11 +35,26 @@ export type { CategoryNameMap } from "./mappers";
 
 /* ------------------------------------------------------------------ auth */
 
-export interface LoggedInUser {
-  id: string;
-  email: string;
-  role: string;
+export interface Session {
   token: string;
+  /** Kullanıcının sahip olduğu tüm roller. */
+  roles: string[];
+  /** Token'ın imzalandığı rol. null ise rol seçimi gerekiyor. */
+  activeRole: string | null;
+  userId: string;
+  email: string;
+  fullName: string | null;
+}
+
+function toSession(wire: WireLoginResponse): Session {
+  return {
+    token: wire.access_token,
+    roles: wire.roles ?? [],
+    activeRole: wire.active_role,
+    userId: wire.user?.id ?? "",
+    email: wire.user?.email ?? "",
+    fullName: wire.user?.full_name ?? null,
+  };
 }
 
 /**
@@ -44,21 +63,54 @@ export interface LoggedInUser {
  * Backend `OAuth2PasswordRequestForm` kullanıyor, yani gövde JSON DEĞİL
  * form-encoded ve e-posta alanının adı `username` (OAuth2 standardı böyle).
  * Bu, kolayca gözden kaçan bir ayrıntı — JSON gönderilse 422 alınır.
+ *
+ * Kullanıcının tek rolü varsa `activeRole` dolu döner ve arayüz doğrudan
+ * panele geçer. Birden fazla rolü varsa null döner — arayüz rol seçimi
+ * gösterip {@link selectRole} çağırmalı.
  */
-export async function login(email: string, password: string): Promise<LoggedInUser> {
+export async function login(email: string, password: string): Promise<Session> {
   const form = new URLSearchParams({ username: email, password });
-  const token = await apiFetch<WireToken>("/api/auth/login", {
+  const wire = await apiFetch<WireLoginResponse>("/api/auth/login", {
     method: "POST",
     formBody: form,
     skipAuth: true,
   });
+  return toSession(wire);
+}
 
-  // Rolü token'ın içini çözerek DEĞİL, /me'ye sorarak alıyoruz: JWT gövdesi
-  // arayüzde doğrulanamaz, sunucunun söylediği role güvenmek doğru olan.
-  // Token henüz store'a yazılmadığı için elle geçiyoruz.
-  const user = await apiFetch<WireUser>("/api/auth/me", { token: token.access_token });
+/**
+ * Aktif rolü seçer ve O ROLE göre imzalanmış YENİ bir token alır.
+ *
+ * Yetki kontrolü sunucuda kalıyor: arayüz "ben şimdi hakemim" diyerek rol
+ * değiştiremez, rolü token taşıyor ve token'ı yalnızca sunucu imzalayabilir.
+ */
+export async function selectRole(role: string, token?: string): Promise<Session> {
+  const wire = await apiFetch<WireLoginResponse>("/api/auth/select-role", {
+    method: "POST",
+    json: { role },
+    token,
+  });
+  return toSession(wire);
+}
 
-  return { id: user.id, email: user.email, role: user.role, token: token.access_token };
+export interface RegisterInput {
+  email: string;
+  password: string;
+  fullName?: string;
+  roles: string[];
+}
+
+export async function register(input: RegisterInput): Promise<WireUser> {
+  return apiFetch<WireUser>("/api/auth/register", {
+    method: "POST",
+    skipAuth: true,
+    json: {
+      email: input.email,
+      password: input.password,
+      full_name: input.fullName || null,
+      roles: input.roles,
+    },
+  });
 }
 
 export async function fetchMe(): Promise<WireUser> {
@@ -176,6 +228,153 @@ export async function submitDecision(input: SubmitDecisionInput): Promise<WireFi
         rationale: input.rationale,
       },
     },
+  );
+}
+
+/**
+ * Raporun kendi dosyasını (PDF) getirir.
+ *
+ * Blob olarak indiriyoruz çünkü `<iframe src="...">` Authorization
+ * başlığını GÖNDERMEZ — token'lı bir uç noktayı doğrudan iframe'e vermek
+ * çalışmaz. Blob'dan üretilen object URL ise sorunsuz gömülebiliyor.
+ * Çağıran taraf işi bitince `URL.revokeObjectURL` ÇAĞIRMALI.
+ */
+export async function fetchReportFile(reportId: string): Promise<{ url: string; blob: Blob }> {
+  const blob = await apiFetchBlob(
+    `/api/reports/${encodeURIComponent(reportId)}/file`,
+  );
+  return { url: URL.createObjectURL(blob), blob };
+}
+
+/** İndirme bağlantısı — tarayıcıya kaydettirir. */
+export async function downloadReportFile(reportId: string, fileName: string): Promise<void> {
+  const blob = await apiFetchBlob(
+    `/api/reports/${encodeURIComponent(reportId)}/file?download=true`,
+  );
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ------------------------------------------------------------ yarismalar */
+
+export async function listCompetitions(): Promise<WireCompetition[]> {
+  return apiFetch<WireCompetition[]>("/api/competitions");
+}
+
+export async function getCompetition(id: string): Promise<WireCompetition> {
+  return apiFetch<WireCompetition>(`/api/competitions/${encodeURIComponent(id)}`);
+}
+
+export async function createCompetition(input: {
+  name: string;
+  description?: string;
+  categoryId: string;
+}): Promise<WireCompetition> {
+  return apiFetch<WireCompetition>("/api/competitions", {
+    method: "POST",
+    json: {
+      name: input.name,
+      description: input.description || null,
+      category_id: input.categoryId,
+    },
+  });
+}
+
+export interface TemplateInput {
+  acceptedLanguages: string[];
+  requiredHeadings: string[];
+  headingSynonyms?: Record<string, string[]>;
+  minPages?: number | null;
+  maxPages?: number | null;
+  minSectionChars?: number | null;
+}
+
+export async function setCompetitionTemplate(
+  id: string,
+  t: TemplateInput,
+): Promise<WireCompetition> {
+  return apiFetch<WireCompetition>(`/api/competitions/${encodeURIComponent(id)}/template`, {
+    method: "PUT",
+    json: {
+      accepted_languages: t.acceptedLanguages,
+      required_headings: t.requiredHeadings,
+      heading_synonyms: t.headingSynonyms ?? {},
+      min_pages: t.minPages ?? null,
+      max_pages: t.maxPages ?? null,
+      min_section_chars: t.minSectionChars ?? null,
+    },
+  });
+}
+
+export async function setCompetitionCriteria(
+  id: string,
+  criteria: { title: string; description?: string; weight: number }[],
+): Promise<WireCompetition> {
+  return apiFetch<WireCompetition>(`/api/competitions/${encodeURIComponent(id)}/criteria`, {
+    method: "PUT",
+    json: {
+      criteria: criteria.map((k) => ({
+        title: k.title,
+        description: k.description || null,
+        weight: k.weight,
+      })),
+    },
+  });
+}
+
+export async function setCompetitionStatus(
+  id: string,
+  status: string,
+): Promise<WireCompetition> {
+  return apiFetch<WireCompetition>(`/api/competitions/${encodeURIComponent(id)}/status`, {
+    method: "PUT",
+    json: { status },
+  });
+}
+
+/* ------------------------------------------------------------- atamalar */
+
+export async function listReferees(competitionId?: string): Promise<WireReferee[]> {
+  const q = competitionId ? `?competition_id=${encodeURIComponent(competitionId)}` : "";
+  return apiFetch<WireReferee[]>(`/api/assignments/referees${q}`);
+}
+
+export async function addRefereeToCompetition(
+  competitionId: string,
+  refereeId: string,
+): Promise<WireReferee> {
+  return apiFetch<WireReferee>(
+    `/api/assignments/competitions/${encodeURIComponent(competitionId)}/referees`,
+    { method: "POST", json: { referee_id: refereeId } },
+  );
+}
+
+export async function autoAssign(competitionId: string): Promise<WireAutoAssignResult> {
+  return apiFetch<WireAutoAssignResult>(
+    `/api/assignments/competitions/${encodeURIComponent(competitionId)}/auto-assign`,
+    { method: "POST" },
+  );
+}
+
+export async function reassignReport(reportId: string, refereeId: string) {
+  return apiFetch(`/api/assignments/${encodeURIComponent(reportId)}`, {
+    method: "PUT",
+    json: { referee_id: refereeId },
+  });
+}
+
+/* ------------------------------------------------- AI taslak gerekce */
+
+export async function fetchRationaleDraft(reportId: string): Promise<WireRationaleDraft> {
+  return apiFetch<WireRationaleDraft>(
+    `/api/reports/${encodeURIComponent(reportId)}/rationale-draft`,
+    { method: "POST" },
   );
 }
 
