@@ -607,42 +607,88 @@ try:
         m.saglayici_durumu()[1],
     )
 
+    # google-genai OPSIYONEL bir bagimlilik (ai-scoring/requirements.txt'te
+    # yorumlu). Testler onun kurulu oldugunu VARSAYAMAZ: temiz bir
+    # kurulumda yok ve saglayici kontrolu "SDK kurulu degil" diyerek daha
+    # erken kesiliyor. Bu gercekten oldu - temiz klonda 5 test patladi.
+    # Bu yuzden iki ortamin ikisini de acikca sinliyoruz.
+    try:
+        import google.genai  # noqa: F401
+
+        _gemini_sdk_var = True
+    except ImportError:
+        _gemini_sdk_var = False
+
     m = _llm_ortami(AI_SCORING_LLM="gemini")
-    check(
-        "gemini secili ama anahtar yoksa kullanilamaz deniyor",
-        m.saglayici_durumu()[0] is False and "API_KEY" in m.saglayici_durumu()[1],
-        m.saglayici_durumu()[1],
-    )
-
-    m = _llm_ortami(AI_SCORING_LLM="gemini", GOOGLE_API_KEY="sahte")
     kullanilabilir, aciklama = m.saglayici_durumu()
-    check(
-        "GIZLILIK KAPISI: ucretsiz Gemini icin acik onay sart",
-        kullanilabilir is False and "ONAY" in aciklama,
-        aciklama[:90],
-    )
-    check(
-        "onay uyarisi nedenini acikliyor (Google icerigi urun gelistirmede kullaniyor)",
-        "gelistirmek" in aciklama and "sartnamesi" in aciklama,
-    )
+    if _gemini_sdk_var:
+        check(
+            "gemini secili ama anahtar yoksa kullanilamaz deniyor",
+            kullanilabilir is False and "API_KEY" in aciklama,
+            aciklama,
+        )
+    else:
+        check(
+            "gemini SDK kurulu degilse nedeni ve cozumu soyleniyor",
+            kullanilabilir is False and "pip install google-genai" in aciklama,
+            aciklama,
+        )
 
-    m = _llm_ortami(
-        AI_SCORING_LLM="gemini", GOOGLE_API_KEY="sahte", AI_SCORING_LLM_ONAY="evet"
-    )
-    check(
-        "acik onay verilince gemini kullanilabilir oluyor",
-        m.saglayici_durumu()[0] is True,
-        m.saglayici_durumu()[1],
-    )
-    check(
-        "model adi ortam degiskeniyle degistirilebiliyor",
-        _llm_ortami(
-            AI_SCORING_LLM="gemini",
-            GOOGLE_API_KEY="sahte",
-            AI_SCORING_LLM_ONAY="evet",
-            AI_SCORING_MODEL="gemini-3.5-flash",
-        ).saglayici_durumu()[1].endswith("(gemini-3.5-flash)"),
-    )
+    if _gemini_sdk_var:
+        m = _llm_ortami(AI_SCORING_LLM="gemini", GOOGLE_API_KEY="sahte")
+        kullanilabilir, aciklama = m.saglayici_durumu()
+        check(
+            "GIZLILIK KAPISI: ucretsiz Gemini icin acik onay sart",
+            kullanilabilir is False and "ONAY" in aciklama,
+            aciklama[:90],
+        )
+        check(
+            "onay uyarisi nedenini acikliyor (icerik urun gelistirmede kullaniliyor)",
+            "gelistirmek" in aciklama and "sartnamesi" in aciklama,
+        )
+        check(
+            "onay uyarisi 'ucretli abonelik yetmez' tuzagini da soyluyor",
+            "Cloud Billing" in aciklama,
+            aciklama[-140:],
+        )
+
+        m = _llm_ortami(
+            AI_SCORING_LLM="gemini", GOOGLE_API_KEY="sahte", AI_SCORING_LLM_ONAY="evet"
+        )
+        check(
+            "acik onay verilince gemini kullanilabilir oluyor",
+            m.saglayici_durumu()[0] is True,
+            m.saglayici_durumu()[1],
+        )
+        check(
+            "model adi ortam degiskeniyle degistirilebiliyor",
+            _llm_ortami(
+                AI_SCORING_LLM="gemini",
+                GOOGLE_API_KEY="sahte",
+                AI_SCORING_LLM_ONAY="evet",
+                AI_SCORING_MODEL="gemini-3.5-flash",
+            ).saglayici_durumu()[1].endswith("(gemini-3.5-flash)"),
+        )
+    else:
+        print("  (google-genai kurulu degil - gizlilik kapisi testleri atlandi)")
+
+    if _gemini_sdk_var:
+
+        def _onay_kapisi_gecti(deger):
+            """Verilen onay degeriyle kapi acildi mi (ONAY uyarisi kalkti mi)."""
+            aciklama = _llm_ortami(
+                AI_SCORING_LLM="gemini", GOOGLE_API_KEY="x", AI_SCORING_LLM_ONAY=deger
+            ).saglayici_durumu()[1]
+            return "ONAY" not in aciklama
+
+        check(
+            "onay degeri 'evet/EVET/yes/true/1' kabul ediliyor",
+            all(_onay_kapisi_gecti(v) for v in ("evet", "EVET", "yes", "true", "1")),
+        )
+        check(
+            "rastgele bir deger onay sayilmiyor",
+            not _onay_kapisi_gecti("belki"),
+        )
 
     # Gemini'nin response_schema'si JSON Schema'nin tamamini desteklemiyor.
     temiz = llm_modulu._gemini_semasini_temizle(
