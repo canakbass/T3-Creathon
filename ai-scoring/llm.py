@@ -43,6 +43,37 @@ Kullanim:
 
 import json
 import os
+from pathlib import Path
+
+# backend/.env dosyasini burada da okuyoruz.
+#
+# NEDEN: backend calisirken `app/auth.py` zaten load_dotenv() cagiriyor, ama
+# ai-scoring TEK BASINA da calistiriliyor (scorer.py, calibrate.py, testler).
+# O durumda .env okunmazsa "anahtari .env'e yazdim ama calismiyor" gibi
+# kafa karistirici bir durum olusurdu. python-dotenv kurulu degilse
+# (ai-scoring'in kendi requirements'inda yok) sessizce atlaniyor -
+# ortam degiskenleri dogrudan verilmisse zaten calisir.
+def _dotenv_yukle():
+    # AI_SCORING_DOTENV=0 ile kapatilabilir. Testler bunu kullaniyor:
+    # saglayici secim mantigini sinamak icin ortami sifirliyorlar, ama bu
+    # fonksiyon her modul yeniden yuklendiginde .env degerlerini geri
+    # enjekte ederse izolasyon bozulur (bu gercekten oldu, test yakaladi).
+    if os.environ.get("AI_SCORING_DOTENV") == "0":
+        return
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    for aday in (
+        Path(__file__).resolve().parent.parent / "backend" / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
+    ):
+        if aday.is_file():
+            # override=False: gercek ortam degiskeni her zaman .env'i yener.
+            load_dotenv(aday, override=False)
+
+
+_dotenv_yukle()
 
 # Saglayici basina varsayilan model. Ortam degiskeniyle degistirilebilir.
 CLAUDE_VARSAYILAN_MODEL = "claude-opus-5"
@@ -102,12 +133,15 @@ def saglayici_durumu():
         return False, "GOOGLE_API_KEY / GEMINI_API_KEY tanimli degil"
     if (_env("AI_SCORING_LLM_ONAY") or "").lower() not in ("evet", "yes", "true", "1"):
         return False, (
-            "Gemini acik ama AI_SCORING_LLM_ONAY=evet ayarlanmamis. Google'in "
-            "UCRETSIZ katmani gonderilen icerigi urunlerini gelistirmek icin "
-            "kullaniyor ve insan incelemesine aciyor; Creathon sartnamesi "
-            "verilerin ucuncu taraflarla paylasilmamasini sart kosuyor. "
-            "Bilerek acmak icin AI_SCORING_LLM_ONAY=evet verin (ya da ucretli "
-            "katman kullanin)."
+            "Gemini acik ama AI_SCORING_LLM_ONAY=evet ayarlanmamis. "
+            "UCRETSIZ katmanda Google gonderilen icerigi urunlerini gelistirmek "
+            "icin kullaniyor ve insan incelemesine aciyor; Creathon sartnamesi "
+            "ise verilerin ucuncu taraflarla paylasilmamasini sart kosuyor - "
+            "bu ikisi celisiyor. UCRETLI katmanda bu sorun yok. "
+            "DIKKAT: 'ucretli' olmak icin Google One AI Premium aboneligi "
+            "YETMEZ; anahtarin bagli oldugu projeye Cloud Billing baglanmali "
+            "(aistudio.google.com -> Projects -> Billing Tier sutunundan "
+            "kontrol edin). Onaylayip devam etmek icin AI_SCORING_LLM_ONAY=evet."
         )
     return True, f"Google Gemini ({_env('AI_SCORING_MODEL', GEMINI_VARSAYILAN_MODEL)})"
 

@@ -567,14 +567,23 @@ _LLM_ENV = (
     "GOOGLE_API_KEY",
     "GEMINI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "AI_SCORING_DOTENV",
 )
 _kaydedilen = {k: os.environ.get(k) for k in _LLM_ENV}
 
 
 def _llm_ortami(**env):
-    """Ilgili ortam degiskenlerini sifirlayip verilenleri kurar."""
+    """Ilgili ortam degiskenlerini sifirlayip verilenleri kurar.
+
+    AI_SCORING_DOTENV=0 SART: llm.py modul yuklenirken backend/.env'i
+    okuyor. Testler ortami sifirliyor ama modul her reload'da .env
+    degerlerini geri enjekte ederse bu testler gelistiricinin makinesinde
+    (.env varsa) patlar, CI'da (.env yoksa) gecer - yani sinsi bir sekilde
+    ortama bagimli olurdu. Bu gercekten oldu ve bu testler yakaladi.
+    """
     for k in _LLM_ENV:
         os.environ.pop(k, None)
+    os.environ["AI_SCORING_DOTENV"] = "0"
     os.environ.update(env)
     importlib.reload(llm_modulu)
     return llm_modulu
