@@ -83,6 +83,24 @@ export function ReportUpload({
   const categoryFieldId = useId();
   const dragCounter = useRef(0);
 
+  /**
+   * Uçuşta olan analiz yoklamalarını bileşen sökülünce iptal eder.
+   *
+   * NEDEN: `pollUntilAnalyzed` iptal edilmediğinde 120 saniye boyunca her
+   * 1,5 saniyede bir istek atmaya devam ediyordu — kullanıcı başka bir
+   * yarışmaya geçtikten sonra bile. Hem gereksiz sunucu yükü hem de sökülmüş
+   * bir bileşene `setState` çağrısı. Yarışma değişince bu bileşen zaten
+   * `key` ile yeniden kuruluyor (bkz. competition-manager.tsx), yani bu
+   * durum gerçek.
+   */
+  const iptalRef = useRef<AbortController[]>([]);
+  useEffect(() => {
+    const kontrolculer = iptalRef.current;
+    return () => {
+      kontrolculer.forEach((k) => k.abort());
+    };
+  }, []);
+
   useEffect(() => {
     if (initialCategories || competitionId) return;
     let cancelled = false;
@@ -128,7 +146,11 @@ export function ReportUpload({
         // Yukleme bitti ama analiz daha yeni basladi.
         patchItem(id, { status: "analyzing", progress: 60, reportId: report.reportId });
 
-        const sonuc = await pollUntilAnalyzed(report.reportId);
+        const kontrolcu = new AbortController();
+        iptalRef.current.push(kontrolcu);
+        const sonuc = await pollUntilAnalyzed(report.reportId, {
+          signal: kontrolcu.signal,
+        });
 
         // `pollUntilAnalyzed` "pending" DIŞINDAKİ ilk durumda dönüyor ve
         // "error" da bir bitiş durumu (analiz çöktü). Burası eskiden dönen
@@ -151,6 +173,9 @@ export function ReportUpload({
         patchItem(id, { status: "success", progress: 100 });
         onUploadComplete?.(file.name);
       } catch (cause) {
+        // İptal bir HATA değil: kullanıcı sayfadan/yarışmadan ayrıldı.
+        // Sökülmüş bileşene "hata" yazmak hem anlamsız hem yanıltıcı.
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
         patchItem(id, {
           status: "error",
           progress: 0,

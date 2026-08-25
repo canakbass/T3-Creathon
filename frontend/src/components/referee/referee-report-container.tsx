@@ -38,7 +38,7 @@ export function RefereeReportContainer({ reportId }: { reportId: string }) {
 
     (async () => {
       try {
-        const first = await getReport(reportId);
+        const first = await getReport(reportId, undefined, controller.signal);
         setData(first);
 
         // Analiz arka planda calisiyor. "pending" ise bitene kadar yokla ki

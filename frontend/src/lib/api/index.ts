@@ -194,9 +194,17 @@ export async function listReportRows(): Promise<ReportRow[]> {
 export async function getReport(
   reportId: string,
   categoryNames?: CategoryNameMap,
+  signal?: AbortSignal,
 ): Promise<ReportWithAnalysis> {
   const names = categoryNames ?? (await loadCategoryNames());
-  const wire = await apiFetch<WireReport>(`/api/reports/${encodeURIComponent(reportId)}`);
+  // `signal`: yoklama iptal edildiğinde UÇUŞTAKİ istek de iptal edilmeli.
+  // Önceden AbortController yalnızca bekleme (`sleep`) arasını kesiyordu;
+  // o an sunucudan dönmekte olan istek tamamlanıp state'i yazıyordu. Sonuç:
+  // hakem başka bir rapora geçtikten sonra ESKİ raporun verisi ekrana
+  // düşebiliyordu.
+  const wire = await apiFetch<WireReport>(`/api/reports/${encodeURIComponent(reportId)}`, {
+    signal,
+  });
   const decision = wire.final_decision;
   return {
     report: toEvaluationReport(wire, names),
@@ -269,6 +277,20 @@ export async function submitDecision(input: SubmitDecisionInput): Promise<WireFi
 }
 
 /**
+ * Analizi ÇÖKMÜŞ bir raporun analizini yeniden çalıştırır (yönetici).
+ *
+ * Çökme çoğu zaman geçici (depolama kesintisi, geçici dosya hatası); tekrar
+ * denemek raporu yeniden yüklemekten iyi, çünkü yeniden yükleme yeni bir
+ * kayıt üretiyor ve eskisi sistemde asılı kalıyor.
+ */
+export async function reanalyzeReport(reportId: string): Promise<WireReport> {
+  return apiFetch<WireReport>(
+    `/api/reports/${encodeURIComponent(reportId)}/reanalyze`,
+    { method: "POST" },
+  );
+}
+
+/**
  * Raporun kendi dosyasını (PDF) getirir.
  *
  * Blob olarak indiriyoruz çünkü `<iframe src="...">` Authorization
@@ -295,7 +317,15 @@ export async function downloadReportFile(reportId: string, fileName: string): Pr
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Object URL'i AYNI görevde iptal etmiyoruz.
+  //
+  // `a.click()` indirmeyi kuyruğa alıyor ama başlatmıyor; hemen ardından
+  // `revokeObjectURL` çağrılırsa Firefox indirme daha okumaya başlamadan
+  // bağlantıyı geçersizleştiriyor ve dosya boş/başarısız iniyor. Chrome
+  // toleranslı olduğu için hata yalnızca bazı tarayıcılarda görünüyordu.
+  // Bir sonraki göreve ertelemek indirmenin başlamasına zaman tanıyor;
+  // yine de iptal ediyoruz ki blob bellekte kalmasın.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 /* ------------------------------------------------------------ yarismalar */
@@ -455,7 +485,7 @@ export async function pollUntilAnalyzed(
   for (;;) {
     if (signal?.aborted) throw new DOMException("Yoklama iptal edildi", "AbortError");
 
-    last = await getReport(reportId, names);
+    last = await getReport(reportId, names, signal);
     onTick?.(last);
 
     if (last.rawStatus !== "pending") return last;

@@ -9,8 +9,19 @@ from .. import models, schemas, auth
 router = APIRouter(prefix="/api", tags=["Categories & Criteria"])
 
 # Category Endpoints
+#
+# NEDEN GIRIS SART: bu iki listeleme uc noktasi kimlik dogrulamasi
+# istemiyordu, yani token'i olmayan herkes yarisma kategorilerini ve
+# degerlendirme kriterlerini okuyabiliyordu. Kriterler bir yarismanin
+# puanlama rubrigi; basvuru acikken disariya acik olmasi, yarismacilarin
+# rapor yazmak yerine rubrige gore optimize etmesine kapi araliyor.
+# Ayrica sartname T3 verilerinin ucuncu taraflarla paylasilmamasini
+# sart kosuyor (bkz. docs/CLAUDE.md).
 @router.get("/categories", response_model=List[schemas.CategoryResponse])
-def get_categories(db: Session = Depends(get_db)):
+def get_categories(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
     return db.query(models.Category).all()
 
 @router.post("/categories", response_model=schemas.CategoryResponse, status_code=status.HTTP_201_CREATED)
@@ -32,7 +43,11 @@ def create_category(
 
 # Criteria Endpoints
 @router.get("/criteria", response_model=List[schemas.CriteriaResponse])
-def get_criteria(category_id: Optional[str] = None, db: Session = Depends(get_db)):
+def get_criteria(
+    category_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
     query = db.query(models.Criteria)
     if category_id:
         query = query.filter(models.Criteria.category_id == category_id)

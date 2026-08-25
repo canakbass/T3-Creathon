@@ -364,12 +364,31 @@ export function CompetitionManager() {
 
           {/* --- Kurulum + yükleme --- */}
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 xl:items-start">
-            <CriteriaTemplateForm onSaved={sablonuKaydet} submitError={kurulumHatasi} />
-            <ReportUpload competitionId={secili.id} onUploadComplete={() => void yukle()} />
+            {/* `key={secili.id}`: yarışma değişince bu bileşenler SIFIRDAN
+                kuruluyor. Anahtarsız hâlinde React aynı örneği koruyordu ve
+                A yarışması için yazılmış ama kaydedilmemiş kriterler, B
+                yarışmasına geçilince formda duruyordu — kaydedildiğinde de
+                B'nin kriterlerini A'nın taslağıyla değiştiriyordu. Aynı
+                şekilde yükleme listesi ve arama kutusu da eski yarışmadan
+                kalıyordu. */}
+            <CriteriaTemplateForm
+              key={`kriter-${secili.id}`}
+              onSaved={sablonuKaydet}
+              submitError={kurulumHatasi}
+            />
+            <ReportUpload
+              key={`yukleme-${secili.id}`}
+              competitionId={secili.id}
+              onUploadComplete={() => void yukle()}
+            />
           </div>
 
           {/* --- Hakem atama --- */}
-          <RefereeAssignmentPanel competitionId={secili.id} onChanged={() => void yukle()} />
+          <RefereeAssignmentPanel
+            key={`atama-${secili.id}`}
+            competitionId={secili.id}
+            onChanged={() => void yukle()}
+          />
         </>
       ) : null}
     </div>

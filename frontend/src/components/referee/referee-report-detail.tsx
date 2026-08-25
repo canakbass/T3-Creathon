@@ -79,7 +79,11 @@ export function RefereeReportDetail({
               Analiz
             </dt>
             <dd className="mt-1 text-sm font-semibold text-foreground">
-              {analysis ? "Tamamlandı" : "Sırada"}
+              {analysis
+                ? "Tamamlandı"
+                : report.status === "error"
+                  ? "Başarısız"
+                  : "Sırada"}
             </dd>
           </div>
         </dl>
@@ -103,6 +107,29 @@ export function RefereeReportDetail({
             onRequestDraft={onRequestDraft}
           />
         </>
+      ) : report.status === "error" ? (
+        /* Analiz ÇÖKTÜ. Burası eskiden "Analiz devam ediyor" gösteriyordu:
+           `analysis` null olduğu için hata durumu bekleme durumundan
+           ayrılmıyordu. Hakem sonsuza kadar bekliyor, rapor da hiçbir zaman
+           karara bağlanamıyordu — çünkü karar formu yalnızca analiz varken
+           çiziliyor. En azından NE OLDUĞUNU ve kime söylenmesi gerektiğini
+           yazmak, sessizce dönen bir saat ikonundan iyi. */
+        <section
+          role="alert"
+          data-testid="analysis-failed"
+          className="flex flex-col items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-6 py-12 text-center"
+        >
+          <p className="text-sm font-semibold text-rose-800">AI analizi tamamlanamadı</p>
+          <p className="max-w-md text-xs leading-relaxed text-rose-700">
+            Değerlendirme motoru bu başvuruyu işlerken hata verdi. En sık sebebi
+            belgenin taranmış (görüntü) bir PDF olması ve metninin okunamamasıdır.
+            Bu rapor için AI önerisi üretilemediğinden karar formu açılmıyor.
+          </p>
+          <p className="max-w-md text-xs leading-relaxed text-rose-700">
+            Yarışma yöneticisinden analizi yeniden çalıştırmasını isteyin; sorun
+            sürerse yarışmacıdan metin tabanlı bir PDF talep edilmelidir.
+          </p>
+        </section>
       ) : (
         <section
           data-testid="analysis-pending"

@@ -186,3 +186,42 @@ describe("RefereeReportDetail — AI Analysis Report", () => {
     expect(panel).toHaveTextContent(mock.suggestion.rationale);
   });
 });
+
+describe("RefereeReportDetail — analiz çöktüğünde", () => {
+  /**
+   * REGRESYON: analizi ÇÖKMÜŞ rapor sonsuza kadar "Analiz devam ediyor"
+   * gösteriyordu.
+   *
+   * `analysis` null olduğu için hata durumu bekleme durumundan
+   * ayrılmıyordu. Hakem dönen bir saat ikonuna bakıp bekliyor, rapor da
+   * hiçbir zaman karara bağlanamıyordu — karar formu yalnızca analiz varken
+   * çiziliyor. Ne olduğunu ve kime söylenmesi gerektiğini yazmak, sessizce
+   * bekletmekten iyi.
+   */
+  it("hata durumunu bekleme durumundan ayırır", () => {
+    render(
+      <RefereeReportDetail
+        report={{ ...report(PENDING_ID), status: "error" as const }}
+        analysis={null}
+      />,
+    );
+
+    const uyari = screen.getByTestId("analysis-failed");
+    expect(uyari).toHaveTextContent(/tamamlanamadı/i);
+    expect(uyari).toHaveTextContent(/taranmış/i);
+    expect(screen.queryByTestId("analysis-pending")).not.toBeInTheDocument();
+    expect(screen.queryByText(/analiz devam ediyor/i)).not.toBeInTheDocument();
+  });
+
+  it("henüz analiz edilmemiş rapor için bekleme durumunu korur", () => {
+    render(
+      <RefereeReportDetail
+        report={{ ...report(PENDING_ID), status: "pending" as const }}
+        analysis={null}
+      />,
+    );
+
+    expect(screen.getByTestId("analysis-pending")).toBeInTheDocument();
+    expect(screen.queryByTestId("analysis-failed")).not.toBeInTheDocument();
+  });
+});

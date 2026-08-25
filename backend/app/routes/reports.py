@@ -521,6 +521,53 @@ def get_report(
     return _attach_analysis_results(report)
 
 
+@router.post("/{report_id}/reanalyze", response_model=schemas.ReportResponse)
+def reanalyze_report(
+    report_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(
+        auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+    ),
+):
+    """Analizi COKMUS bir raporun analizini yeniden calistirir.
+
+    NEDEN EKLENDI: analiz cokerse rapor "error" durumunda kaliyordu ve
+    kurtarmanin tek yolu raporu yeniden YUKLEMEKTI. Ama yeniden yukleme
+    yeni bir kayit uretiyor; eski kayit sistemde asili kaliyor, hakemin
+    listesinde gorunuyor ve hicbir zaman karara baglanamiyor. Cogu cokme
+    gecici (depolama kesintisi, gecici dosya hatasi) oldugu icin tekrar
+    denemek dogru cozum.
+
+    Yalnizca "error" durumundaki raporlar icin: analiz edilmis bir raporu
+    yeniden analiz etmek, hakemin uzerinde calistigi puanlari sessizce
+    degistirirdi.
+    """
+    report = db.query(models.Report).filter(models.Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
+    if report.status != "error":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Yalnizca analizi basarisiz olan raporlar yeniden analiz "
+                f"edilebilir (bu raporun durumu: '{report.status}')."
+            ),
+        )
+
+    # Eski (yarim kalmis) analiz kaydi varsa temizleniyor; run_background_analysis
+    # her calismada yeni bir AiAnalysis ekliyor ve iki kayit kalirsa hangisinin
+    # gecerli oldugu belirsiz olurdu.
+    if report.ai_analysis:
+        db.delete(report.ai_analysis)
+    report.status = "pending"
+    db.commit()
+    db.refresh(report)
+
+    background_tasks.add_task(run_background_analysis, report_id, report.file_path, db)
+    return _attach_analysis_results(report)
+
+
 @router.get("/{report_id}/file")
 def get_report_file(
     report_id: str,

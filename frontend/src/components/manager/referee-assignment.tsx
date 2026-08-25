@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   addRefereeToCompetition,
   autoAssign,
@@ -47,7 +47,20 @@ export function RefereeAssignmentPanel({
   const [busy, setBusy] = useState(false);
   const [eklenecek, setEklenecek] = useState("");
 
+  /**
+   * `gecerliIstek` yarış koşulunu engelliyor.
+   *
+   * NEDEN: yönetici yarışmalar arasında hızlıca geçerse iki `yukle` çağrısı
+   * aynı anda uçuşta olur ve HANGİSİNİN ÖNCE DÖNECEĞİ garanti değil. Eski
+   * yarışmanın yanıtı sonra dönerse, ekranda B yarışması yazarken A
+   * yarışmasının hakemleri ve raporları gösterilir — yönetici de yanlış
+   * yarışmada atama yapar. Her yükleme kendi kimliğini alıyor ve yalnızca
+   * EN SON başlatılan yükleme state yazabiliyor.
+   */
+  const istekSayaci = useRef(0);
+
   const yukle = useCallback(async () => {
+    const benimIstegim = ++istekSayaci.current;
     setError(null);
     try {
       // Atama ve karar bilgisi listede geliyor - rapor başına ayrı istek
@@ -58,14 +71,12 @@ export function RefereeAssignmentPanel({
         listReferees(competitionId),
         listReportRows(),
       ]);
+      if (benimIstegim !== istekSayaci.current) return;
       setTumHakemler(hepsi);
       setYarismaHakemleri(yarismada);
-      // Yalnızca BU yarışmanın raporları. Yarışmaya bağlı olmayan eski
-      // kayıtlar da gösteriliyor ki geçiş döneminde kaybolmasınlar.
-      setRaporlar(
-        rprlar.filter((r) => r.competitionId === competitionId || r.competitionId === null),
-      );
+      setRaporlar(rprlar);
     } catch (cause) {
+      if (benimIstegim !== istekSayaci.current) return;
       setError(describeError(cause));
     }
   }, [competitionId]);
@@ -81,15 +92,39 @@ export function RefereeAssignmentPanel({
     [tumHakemler, yarismaHakemleri],
   );
 
+  /**
+   * YALNIZCA bu yarışmanın raporları.
+   *
+   * Önceden `|| r.competitionId === null` ile yarışmaya bağlı olmayan
+   * raporlar da listeleniyordu. Bu, o raporların HER yarışmanın panelinde
+   * görünmesi demekti: A yarışmasından atama yapılınca aynı rapor B'de de
+   * "atanmış" görünüyor, ama yarışma başına yük hesabına hiç girmedikleri
+   * için otomatik dağıtımın dengesi de yanlış çıkıyordu.
+   *
+   * Filtre YÜKLEMEDE değil BURADA: `initialReports` ile kurulan bir örnek
+   * (testler, sunucu tarafı ön yükleme) yükleme yolundan hiç geçmiyor ve
+   * filtresiz liste gösterirdi.
+   */
+  const buYarismaninRaporlari = useMemo(
+    () => raporlar.filter((r) => r.competitionId === competitionId),
+    [raporlar, competitionId],
+  );
+
+  // Yok saymıyoruz: var olduklarını söylüyoruz, sadece burada göstermiyoruz.
+  const bagsizSayisi = useMemo(
+    () => raporlar.filter((r) => r.competitionId === null).length,
+    [raporlar],
+  );
+
   const filtreliRaporlar = useMemo(() => {
     const q = arama.trim().toLocaleLowerCase("tr");
-    if (!q) return raporlar;
-    return raporlar.filter(
+    if (!q) return buYarismaninRaporlari;
+    return buYarismaninRaporlari.filter(
       (r) =>
         r.report.projectName.toLocaleLowerCase("tr").includes(q) ||
         r.report.reportId.toLocaleLowerCase("tr").includes(q),
     );
-  }, [arama, raporlar]);
+  }, [arama, buYarismaninRaporlari]);
 
   async function hakemEkle() {
     if (!eklenecek) return;
@@ -113,12 +148,23 @@ export function RefereeAssignmentPanel({
     setInfo(null);
     try {
       const sonuc = await autoAssign(competitionId);
-      setInfo(
+      const dagitim =
         sonuc.assigned === 0
           ? "Atanmamış rapor kalmadı."
           : `${sonuc.assigned} rapor dağıtıldı. ` +
-              sonuc.load.map((l) => `${l.email}: ${l.assigned_count}`).join(" · "),
-      );
+            sonuc.load.map((l) => `${l.email}: ${l.assigned_count}`).join(" · ");
+      // Dağıtılamayan raporlar SESSİZCE atlanmamalı: aksi halde yönetici
+      // "dağıtım tamam" sanıp hiç değerlendirilmeyen bir rapor bırakır.
+      // (Backend bunları `skipped` ile bildiriyor; en sık sebep raporun
+      // sahibinin tek uygun hakem olması — çıkar çatışması.)
+      const atlanan = sonuc.skipped ?? [];
+      if (atlanan.length > 0) {
+        setError(
+          `${atlanan.length} rapor dağıtılamadı: ` +
+            atlanan.map((a) => `${a.report_id} (${a.reason})`).join(" · "),
+        );
+      }
+      setInfo(dagitim);
       await yukle();
       onChanged?.();
     } catch (cause) {
@@ -253,12 +299,24 @@ export function RefereeAssignmentPanel({
           />
         </div>
 
+        {bagsizSayisi > 0 ? (
+          <p
+            data-testid="unattached-reports-notice"
+            className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800"
+          >
+            {bagsizSayisi} rapor hiçbir yarışmaya bağlı değil ve burada
+            gösterilmiyor. Bunlar yarışma akışı devreye girmeden önce
+            yüklenmiş eski kayıtlar; bir yarışmaya bağlı olmadıkları için
+            dağıtıma dahil edilemezler.
+          </p>
+        ) : null}
+
         {filtreliRaporlar.length === 0 ? (
           <p
             data-testid="no-reports"
             className="mt-4 rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-muted"
           >
-            {arama ? "Aramaya uyan rapor yok." : "Henüz rapor yüklenmemiş."}
+            {arama ? "Aramaya uyan rapor yok." : "Bu yarışmaya henüz rapor yüklenmemiş."}
           </p>
         ) : (
           <ul className="mt-4 flex flex-col gap-2" data-testid="assignment-report-list">

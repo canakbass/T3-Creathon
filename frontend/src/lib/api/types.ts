@@ -78,6 +78,13 @@ export interface WireAutoAssignResult {
   assigned: number;
   assignments: { report_id: string; referee_id: string; referee_email: string }[];
   load: { referee_id: string; email: string; assigned_count: number }[];
+  /**
+   * Dağıtılamayan raporlar. En sık sebep, raporun sahibinin yarışmadaki tek
+   * uygun hakem olması (kimse kendi raporunun hakemi olamaz). Sessizce
+   * atlanırsa yönetici "dağıtım tamam" sanıp hiç değerlendirilmeyen bir
+   * rapor bırakır. Eski backend'lerde alan yok — bu yüzden isteğe bağlı.
+   */
+  skipped?: { report_id: string; reason: string }[];
 }
 
 /** POST /api/reports/{id}/rationale-draft yanıtı */
