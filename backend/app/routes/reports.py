@@ -104,6 +104,46 @@ def _attach_analysis_results(report: models.Report) -> models.Report:
     return report
 
 
+def _benzerligi_isaretle(
+    benzerlik: dict, toplam: int, okunan: int, atlanan: list
+) -> dict:
+    """Okunamayan karsilastirma raporlarini benzerlik sonucuna yansitir.
+
+    Iki ayri durum var ve hakem icin anlamlari cok farkli:
+
+      * HICBIRI okunamadi -> karsilastirma HIC yapilmadi. Modulun urettigi
+        "bu sistemdeki ilk basvuru" ozeti bu durumda yanlis; ozetin kendisi
+        degistiriliyor.
+      * BAZILARI okunamadi -> karsilastirma eksik. Puan gecerli ama eksik
+        bir kumeye dayaniyor; puana dokunmadan uyari ekleniyor.
+
+    Puan iki durumda da YUKSELTILMIYOR: benzerlik puani "ne kadar kotu"
+    olcusu, uydurma bir ceza puani hakemi baska yone yanıltirdi.
+    """
+    if okunan == 0:
+        return {
+            "score": benzerlik["score"],
+            "summary": (
+                f"Benzerlik karsilastirmasi YAPILAMADI: {toplam} rapor vardi, "
+                "hicbiri okunamadi."
+            ),
+            "findings": [
+                "Bu bir sistem hatasidir, ozgunluk kanitı DEGILDIR.",
+                "Rapor elle intihal kontrolunden gecirilmeli.",
+                *[f"Okunamayan rapor - {a}" for a in atlanan[:5]],
+            ],
+        }
+    return {
+        **benzerlik,
+        "findings": [
+            *benzerlik["findings"],
+            f"UYARI: karsilastirma EKSIK - {toplam} rapordan {toplam - okunan} tanesi "
+            "okunamadi. Gercek ortusme bu puandan yuksek olabilir.",
+            *[f"Okunamayan rapor - {a}" for a in atlanan[:5]],
+        ],
+    }
+
+
 def run_background_analysis(report_id: str, file_path: str, db: Session):
     try:
         # Get category information
@@ -162,17 +202,20 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
             yerel_hedef = stack.enter_context(storage.local_path(file_path))
 
             existing_paths = []
+            atlanan = []
             for r in other_reports:
                 # Yerel referanslarda dosya diskte yoksa atliyoruz (eski
                 # davranis buydu); uzak referanslarda indirme denenip
                 # basarisiz olursa asagidaki except yakaliyor.
                 if not storage.is_remote(r.file_path) and not os.path.exists(r.file_path):
+                    atlanan.append(f"{r.id}: dosya bulunamadi")
                     continue
                 try:
                     existing_paths.append(stack.enter_context(storage.local_path(r.file_path)))
                 except Exception as exc:
                     # Tek bir eski rapor okunamazsa tum analiz dusmemeli;
                     # o rapor karsilastirmadan cikariliyor.
+                    atlanan.append(f"{r.id}: {exc}")
                     print(f"Karsilastirilacak rapor okunamadi ({r.id}): {exc}")
 
             analysis_data = ai.run_full_analysis(
@@ -183,7 +226,20 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
                 declared_category_id=report.category_id,
                 rules=rules,
             )
-        
+
+        # Benzerlik sonucunu DURUSTLESTIR.
+        #
+        # ai-scoring yalnizca KAC raporla karsilastirdigini bilir, kac rapor
+        # OLMASI GEREKTIGINI bilmez. Karsilastirilacak rapor vardi ama hicbiri
+        # okunamadiysa modul "Karsilastirilacak baska rapor yok - bu, sistemdeki
+        # ilk basvuru" diyor. Hakemin ekranda okudugu bu cumle o durumda YANLIS
+        # olur ve intihal kontrolunun hic calismadigini gizler - bir intihal
+        # kontrolunun yapabilecegi en kotu hata budur.
+        if atlanan:
+            analysis_data["similarity"] = _benzerligi_isaretle(
+                analysis_data["similarity"], len(other_reports), len(existing_paths), atlanan
+            )
+
         # Save analysis results
         db_analysis = models.AiAnalysis(
             id=str(uuid.uuid4()),

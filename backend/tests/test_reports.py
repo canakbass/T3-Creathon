@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from app.routes.reports import UPLOAD_DIR
+
 # Gercek bir TEKNOFEST finalist raporu - AI modullerinin sahte "%PDF-1.4
 # Mock" baytlari yerine gercek metin uzerinde calistigini dogrulamak icin.
 GERCEK_RAPOR = (
@@ -274,3 +276,67 @@ def test_real_pdf_produces_real_ai_scores(client):
     assert kopya_analiz["results"]["similarity"]["score"] > 35, (
         kopya_analiz["results"]["similarity"]
     )
+
+
+@pytest.mark.skipif(not GERCEK_RAPOR.exists(), reason="referans KTR raporu bulunamadi")
+def test_okunamayan_karsilastirma_raporu_gizlenmez(client):
+    """REGRESYON: intihal kontrolu calismadiginda "ilk basvuru" diyordu.
+
+    ai-scoring yalnizca KAC raporla karsilastirdigini biliyor, kac rapor
+    OLMASI GEREKTIGINI bilmiyor. Karsilastirilacak rapor VARDI ama dosyasi
+    okunamadiysa (disk temizligi, Supabase kesintisi, bozuk kayit) modul
+    sifir rapor gormus oluyor ve su cumleyi uretiyordu:
+
+        "Karsilastirilacak baska rapor yok - bu, sistemdeki ilk basvuru."
+
+    Hakemin ekranda okudugu bu cumle o durumda yanlis. Daha kotusu, intihal
+    kontrolunun hic calismadigini gizliyor: hakem "kontrol edildi, temiz"
+    sanip birebir kopya bir raporu onaylayabilir. Bir intihal kontrolunun
+    yapabilecegi en kotu hata bu.
+
+    GERCEK PDF sart: sahte "%PDF-1.4 Mock" baytlariyla benzerlik modulu
+    daha en basta "PDF okunamadi" dalina giriyor ve bu kod yoluna hic
+    ulasilmiyor - test yanlis sebeple gecerdi.
+    """
+    manager = _kaydol_ve_giris(client, "sim_manager@test.org", "COMPETITION_MANAGER")
+    referee = _kaydol_ve_giris(client, "sim_referee@test.org", "REFEREE")
+    cat_id = client.post(
+        "/api/categories",
+        json={"name": "AI & Machine Learning", "description": "Neural networks."},
+        headers=manager,
+    ).json()["id"]
+
+    def _yukle(ad):
+        with open(GERCEK_RAPOR, "rb") as f:
+            r = client.post(
+                "/api/reports/upload",
+                data={"project_name": ad, "category_id": cat_id},
+                files={"file": (f"{ad}.pdf", f, "application/pdf")},
+                headers=manager,
+            )
+        assert r.status_code == 201, r.text[:200]
+        return r.json()["id"]
+
+    ilk_id = _yukle("Ilk Rapor")
+
+    # Ilk raporun dosyasini diskten sil: "karsilastirilacak rapor VAR ama
+    # okunamiyor" durumu tam olarak bu. Kayit veri tabaninda duruyor.
+    silinen = [p for p in Path(UPLOAD_DIR).glob("*") if ilk_id in p.name]
+    assert silinen, f"yuklenen dosya bulunamadi: {UPLOAD_DIR}/ icinde {ilk_id}"
+    for yol in silinen:
+        os.remove(yol)
+
+    ikinci_id = _yukle("Ikinci Rapor")
+    _ata(client, manager, ikinci_id, "sim_referee@test.org")
+
+    detay = client.get(f"/api/reports/{ikinci_id}", headers=referee).json()
+    assert detay["status"] == "analyzed", detay["status"]
+    benzerlik = detay["ai_analysis"]["results"]["similarity"]
+    metin = benzerlik["summary"] + " " + " ".join(benzerlik["findings"])
+
+    assert "ilk başvuru" not in metin, (
+        "okunamayan rapor 'ilk basvuru' olarak sunuldu - hakem intihal "
+        f"kontrolunun calismadigini anlayamaz: {benzerlik}"
+    )
+    assert "YAPILAMADI" in benzerlik["summary"], benzerlik["summary"]
+    assert any("elle intihal" in b for b in benzerlik["findings"]), benzerlik["findings"]
