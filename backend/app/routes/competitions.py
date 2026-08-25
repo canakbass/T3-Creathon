@@ -25,7 +25,7 @@ import json
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -141,10 +141,79 @@ def get_competition(
     return _yanit(y)
 
 
+def _kural_degisimini_dogrula(db: Session, yarisma, onaylandi: bool) -> list:
+    """Puanlama kurallari degistirilebilir mi, degistirilirse ne olur.
+
+    NEDEN GEREKLI: sablon kurallari ve kriterler, AI analizinin puanlama
+    rubrigi. Analiz edildikten SONRA degistirilince eski raporlar eski
+    rubrikle, yeni raporlar yeni rubrikle puanlaniyor - yani AYNI yarismada
+    iki yarismaci FARKLI kurallarla degerlendiriliyor.
+
+    Bu teorik degil, olculdu: kriterler "Ozgunluk %70 / Kaynakca %30" iken
+    yuklenen rapor 100/100 "onay" aldi; kriterler "Kaynakca %90 / Ozgunluk
+    %10" yapildiktan sonra yuklenen ikinci rapor 9/100 "ret" aldi. Bir
+    yarismada olabilecek en agir adaletsizlik bu.
+
+    Kurallar:
+      * Karar VERILMIS rapor varsa degisiklik yok - hakem kararlari o
+        rubrige gore verildi, geriye donuk degistirmek onlari gecersiz kilar.
+      * Analiz edilmis rapor varsa yonetici acikca onaylamali; onaylarsa o
+        raporlarin analizi SILINIP yeniden calistiriliyor ki hepsi ayni
+        rubrikle puanlansin.
+      * Hic analiz yoksa serbest (normal kurulum akisi).
+
+    Doner: yeniden analiz edilecek raporlarin listesi (bos olabilir).
+    """
+    raporlar = [r for r in yarisma.reports]
+    kararli = [r for r in raporlar if r.final_decision is not None]
+    if kararli:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Bu yarismada {len(kararli)} rapor icin hakem karari verilmis. "
+                "Puanlama kurallari degistirilemez - kararlar mevcut kurallara "
+                "gore verildi ve degisiklik onlari gecersiz kilardi."
+            ),
+        )
+
+    analizli = [r for r in raporlar if r.status not in ("pending",)]
+    if analizli and not onaylandi:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Bu yarismada {len(analizli)} rapor zaten analiz edildi. "
+                "Kurallari degistirirseniz o raporlar ESKI kurallarla, yeni "
+                "raporlar YENI kurallarla puanlanir; ayni yarismada iki "
+                "yarismaci farkli olcutlerle degerlendirilmis olur. Devam "
+                "etmek icin istege `confirm_reanalysis: true` ekleyin - "
+                "mevcut analizler silinip yeni kurallarla yeniden calistirilir."
+            ),
+        )
+    return analizli
+
+
+def _yeniden_analiz_kuyrukla(db: Session, background_tasks: BackgroundTasks, raporlar) -> None:
+    """Verilen raporlarin analizini silip yeniden calistirilmak uzere kuyruklar."""
+    # Ice aktarma FONKSIYON ICINDE: routes/reports.py bu modulu (competitions)
+    # zaten ice aktariyor; ust seviyede karsilikli ice aktarma dongu olusturur.
+    from . import reports as reports_modulu
+
+    for r in raporlar:
+        if r.ai_analysis:
+            db.delete(r.ai_analysis)
+        r.status = "pending"
+    db.commit()
+    for r in raporlar:
+        background_tasks.add_task(
+            reports_modulu.run_background_analysis, r.id, r.file_path, db
+        )
+
+
 @router.put("/{competition_id}/template", response_model=schemas.CompetitionResponse)
 def set_template(
     competition_id: str,
     govde: schemas.CompetitionTemplate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(_YONETICI),
 ):
@@ -165,6 +234,10 @@ def set_template(
                 detail="En az sayfa sayisi, en fazladan buyuk olamaz.",
             )
 
+    # Sablon kurallari AI'nin dil/sablon/baslik kontrollerinin olcutu;
+    # analizden sonra degistirmek raporlari farkli olcutlerle puanlar.
+    yeniden = _kural_degisimini_dogrula(db, y, govde.confirm_reanalysis)
+
     y.accepted_languages = json.dumps(govde.accepted_languages, ensure_ascii=False)
     y.required_headings = json.dumps(govde.required_headings, ensure_ascii=False)
     y.heading_synonyms = json.dumps(govde.heading_synonyms or {}, ensure_ascii=False)
@@ -172,6 +245,8 @@ def set_template(
     y.max_pages = govde.max_pages
     y.min_section_chars = govde.min_section_chars
     db.commit()
+    if yeniden:
+        _yeniden_analiz_kuyrukla(db, background_tasks, yeniden)
     db.refresh(y)
     return _yanit(y)
 
@@ -180,6 +255,7 @@ def set_template(
 def set_criteria(
     competition_id: str,
     govde: schemas.CompetitionCriteriaSet,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(_YONETICI),
 ):
@@ -205,6 +281,10 @@ def set_criteria(
             detail=f"Kriter agirliklarinin toplami 100 olmali (su an {toplam}).",
         )
 
+    # Kriterler AI kriter puanlamasinin rubrigi; analizden sonra degistirmek
+    # ayni yarismadaki raporlari FARKLI olcutlerle puanlar.
+    yeniden = _kural_degisimini_dogrula(db, y, govde.confirm_reanalysis)
+
     # Tam degistirme: eskiler silinip yenileri yaziliyor. Kismi guncelleme
     # yerine bunu sectik cunku agirlik toplaminin 100 kalmasi gerekiyor ve
     # tek tek guncellemede ara durumlar gecersiz olurdu.
@@ -224,6 +304,8 @@ def set_criteria(
             )
         )
     db.commit()
+    if yeniden:
+        _yeniden_analiz_kuyrukla(db, background_tasks, yeniden)
     db.refresh(y)
     return _yanit(y)
 

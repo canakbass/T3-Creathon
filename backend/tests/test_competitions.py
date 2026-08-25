@@ -286,3 +286,111 @@ def test_karar_verilmis_raporun_atamasi_silinemez(kurulum, client):
     )
     r = client.delete(f"/api/assignments/{rapor_id}", headers=ynt)
     assert r.status_code == 400, f"karar verilmis raporun atamasi silindi (HTTP {r.status_code})"
+
+
+# --- Kurallar analiz sonrasi degistirilirse -------------------------------
+
+def _rapor_yukle_ve_analiz_et(client, kurulum, yarismaci, ad="Proje"):
+    r = client.post(
+        "/api/reports/upload",
+        data={"project_name": ad, "competition_id": kurulum["yar_id"]},
+        files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
+        headers=yarismaci,
+    )
+    assert r.status_code == 201, r.text[:200]
+    return r.json()["id"]
+
+
+def test_analiz_sonrasi_kriter_degisimi_onay_ister(kurulum, client):
+    """REGRESYON: kriterler analiz SONRASI serbestce degistirilebiliyordu.
+
+    Olculen davranis: kriterler "Ozgunluk %70 / Kaynakca %30" iken yuklenen
+    rapor 100/100 "onay" aldi; kriterler "Kaynakca %90 / Ozgunluk %10"
+    yapildiktan sonra yuklenen ikinci rapor 9/100 "ret" aldi. AYNI yarismada
+    iki yarismaci FARKLI kurallarla degerlendirildi - bir yarismada
+    olabilecek en agir adaletsizlik.
+    """
+    _acilabilir_hale_getir(client, kurulum)
+    ynt = kurulum["yonetici"]
+    client.put(
+        f"/api/competitions/{kurulum['yar_id']}/status", json={"status": "open"}, headers=ynt
+    )
+    yarismaci = _kaydol_ve_giris(client, "yk1@test.org", ["COMPETITOR"])
+    _rapor_yukle_ve_analiz_et(client, kurulum, yarismaci)
+
+    yeni = {"criteria": [{"title": "Kaynakça", "weight": 100}]}
+    r = client.put(
+        f"/api/competitions/{kurulum['yar_id']}/criteria", json=yeni, headers=ynt
+    )
+    assert r.status_code == 409, f"onaysiz degistirildi (HTTP {r.status_code})"
+    assert "analiz edildi" in r.json()["detail"]
+
+    # Onaylaninca gecmeli ve mevcut analizler yeniden calistirilmali.
+    r = client.put(
+        f"/api/competitions/{kurulum['yar_id']}/criteria",
+        json={**yeni, "confirm_reanalysis": True},
+        headers=ynt,
+    )
+    assert r.status_code == 200, r.text[:200]
+    assert [k["title"] for k in r.json()["criteria"]] == ["Kaynakça"]
+
+
+def test_karar_verilmisse_kriterler_onayla_bile_degismez(kurulum, client):
+    """Hakem kararlari mevcut rubrige gore verildi; geriye donuk kural
+    degisikligi onlari gecersiz kilardi. Burada onay bayragi da yetmemeli."""
+    _acilabilir_hale_getir(client, kurulum)
+    ynt = kurulum["yonetici"]
+    yid = kurulum["yar_id"]
+    client.put(f"/api/competitions/{yid}/status", json={"status": "open"}, headers=ynt)
+
+    yarismaci = _kaydol_ve_giris(client, "yk2@test.org", ["COMPETITOR"])
+    hakem = _kaydol_ve_giris(client, "hk2@test.org", ["REFEREE"])
+    rapor_id = _rapor_yukle_ve_analiz_et(client, kurulum, yarismaci)
+
+    hakemler = client.get("/api/assignments/referees", headers=ynt).json()
+    hakem_id = next(h["id"] for h in hakemler if h["email"] == "hk2@test.org")
+    client.post(
+        f"/api/assignments/competitions/{yid}/referees",
+        json={"referee_id": hakem_id},
+        headers=ynt,
+    )
+    client.put(f"/api/assignments/{rapor_id}", json={"referee_id": hakem_id}, headers=ynt)
+    karar = client.post(
+        f"/api/reports/{rapor_id}/decision",
+        json={
+            "outcome": "approve",
+            "final_score": 85,
+            "rationale": "Rapor beklenen duzeyi karsiliyor, gerekce yeterince uzun.",
+        },
+        headers=hakem,
+    )
+    assert karar.status_code == 200, karar.text[:200]
+
+    r = client.put(
+        f"/api/competitions/{yid}/criteria",
+        json={"criteria": [{"title": "Kaynakça", "weight": 100}], "confirm_reanalysis": True},
+        headers=ynt,
+    )
+    assert r.status_code == 409, f"karar sonrasi kriterler degisti (HTTP {r.status_code})"
+    assert "hakem karari verilmis" in r.json()["detail"]
+
+
+def test_hic_rapor_yokken_kurallar_serbestce_degisir(kurulum, client):
+    """Kilit fazla siki olmamali: normal kurulum akisinda (henuz rapor yok)
+    yonetici kurallari istedigi kadar duzenleyebilmeli."""
+    ynt = kurulum["yonetici"]
+    yid = kurulum["yar_id"]
+    for agirlik in (100, 60, 40):
+        r = client.put(
+            f"/api/competitions/{yid}/criteria",
+            json={
+                "criteria": [
+                    {"title": "Özgünlük", "weight": agirlik},
+                    {"title": "Kaynakça", "weight": 100 - agirlik},
+                ]
+                if agirlik != 100
+                else [{"title": "Özgünlük", "weight": 100}]
+            },
+            headers=ynt,
+        )
+        assert r.status_code == 200, r.text[:200]

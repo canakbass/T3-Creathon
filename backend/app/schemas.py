@@ -56,6 +56,9 @@ class CompetitionTemplate(BaseModel):
     min_pages: Optional[int] = None
     max_pages: Optional[int] = None
     min_section_chars: Optional[int] = None
+    # Analiz edilmis raporlar varsa kurallari degistirmek onlarin puanlarini
+    # gecersiz kilar (bkz. _degisim_etkisi). Yonetici bunu acikca onaylamali.
+    confirm_reanalysis: bool = False
 
 class CriterionInput(BaseModel):
     title: str = Field(min_length=1, max_length=200)
@@ -68,6 +71,7 @@ class CriterionInput(BaseModel):
 
 class CompetitionCriteriaSet(BaseModel):
     criteria: List[CriterionInput]
+    confirm_reanalysis: bool = False
 
 class CriterionResponse(BaseModel):
     id: str

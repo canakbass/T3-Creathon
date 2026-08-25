@@ -362,9 +362,17 @@ export interface TemplateInput {
   minSectionChars?: number | null;
 }
 
+/**
+ * `confirmReanalysis`: yarışmada ZATEN ANALİZ EDİLMİŞ rapor varsa backend
+ * HTTP 409 döner. Kuralları değiştirmek o raporları eski, yeni raporları
+ * yeni ölçütle puanlardı; aynı yarışmada iki yarışmacı farklı kurallarla
+ * değerlendirilmiş olurdu. Onay verilirse mevcut analizler silinip yeni
+ * kurallarla yeniden çalıştırılıyor.
+ */
 export async function setCompetitionTemplate(
   id: string,
   t: TemplateInput,
+  confirmReanalysis = false,
 ): Promise<WireCompetition> {
   return apiFetch<WireCompetition>(`/api/competitions/${encodeURIComponent(id)}/template`, {
     method: "PUT",
@@ -375,13 +383,16 @@ export async function setCompetitionTemplate(
       min_pages: t.minPages ?? null,
       max_pages: t.maxPages ?? null,
       min_section_chars: t.minSectionChars ?? null,
+      confirm_reanalysis: confirmReanalysis,
     },
   });
 }
 
+/** `confirmReanalysis` için bkz. {@link setCompetitionTemplate}. */
 export async function setCompetitionCriteria(
   id: string,
   criteria: { title: string; description?: string; weight: number }[],
+  confirmReanalysis = false,
 ): Promise<WireCompetition> {
   return apiFetch<WireCompetition>(`/api/competitions/${encodeURIComponent(id)}/criteria`, {
     method: "PUT",
@@ -391,6 +402,7 @@ export async function setCompetitionCriteria(
         description: k.description || null,
         weight: k.weight,
       })),
+      confirm_reanalysis: confirmReanalysis,
     },
   });
 }

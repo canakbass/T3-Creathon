@@ -8,6 +8,7 @@ import {
   setCompetitionCriteria,
   setCompetitionStatus,
   setCompetitionTemplate,
+  ApiError,
 } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
 import type { WireCategory, WireCompetition } from "@/lib/api/types";
@@ -69,6 +70,10 @@ export function CompetitionManager() {
   const [seciliId, setSeciliId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [kurulumHatasi, setKurulumHatasi] = useState<string | null>(null);
+  // 409 alındığında, aynı değerlerle "onaylayarak" tekrar denemek için
+  // saklanıyor. null ise onay butonu gösterilmiyor.
+  const [yenidenAnalizOnayi, setYenidenAnalizOnayi] =
+    useState<CriteriaTemplateFormValues | null>(null);
   const [yeniAd, setYeniAd] = useState("");
   const [yeniKategori, setYeniKategori] = useState("");
   const [busy, setBusy] = useState(false);
@@ -117,25 +122,51 @@ export function CompetitionManager() {
    * topluyor; backend'de bunlar iki ayrı uç nokta, o yüzden ikisi de
    * çağrılıyor. Biri başarısız olursa hata yüzeye çıkıyor ve form
    * sıfırlanmıyor.
+   *
+   * `onay`: yarışmada zaten analiz edilmiş rapor varsa backend HTTP 409
+   * dönüyor — kuralları değiştirmek o raporları eski, yeni raporları yeni
+   * ölçütle puanlardı ve aynı yarışmada iki yarışmacı farklı kurallarla
+   * değerlendirilirdi. Yönetici onaylarsa mevcut analizler silinip yeni
+   * kurallarla yeniden çalıştırılıyor. Karar VERİLMİŞ rapor varsa onay da
+   * yetmiyor; o durumda backend yine 409 döner ve buton gösterilmez.
    */
-  async function sablonuKaydet(values: CriteriaTemplateFormValues) {
+  async function sablonuKaydet(values: CriteriaTemplateFormValues, onay = false) {
     if (!secili) return;
     setKurulumHatasi(null);
+    setYenidenAnalizOnayi(null);
     try {
-      await setCompetitionTemplate(secili.id, {
-        acceptedLanguages: ["tr"],
-        requiredHeadings: values.requiredHeadings.map((h) => h.value),
-        minPages: null,
-        maxPages: null,
-        minSectionChars: null,
-      });
+      await setCompetitionTemplate(
+        secili.id,
+        {
+          acceptedLanguages: ["tr"],
+          requiredHeadings: values.requiredHeadings.map((h) => h.value),
+          minPages: null,
+          maxPages: null,
+          minSectionChars: null,
+        },
+        onay,
+      );
       await setCompetitionCriteria(
         secili.id,
         values.metrics.map((m) => ({ title: m.name, weight: m.weight })),
+        onay,
       );
       await yukle();
     } catch (cause) {
       setKurulumHatasi(describeError(cause));
+      // 409 alındı ama sebep "hakem kararı verilmiş" DEĞİLSE onaylayarak
+      // tekrar denemek mümkün. Karar verilmişse onay bayrağı da yetmiyor
+      // (backend yine 409 döner), o yüzden buton gösterilmemeli.
+      //
+      // Metin backend'in ürettiği cümleyle birebir eşleşmeli: ilk yazdığım
+      // hâli "karar verilmis" arıyordu ama backend "hakem karari verilmis"
+      // yazıyor — "karari" ≠ "karar " olduğu için hiç eşleşmiyor ve karar
+      // verilmiş yarışmalarda da boşuna onay butonu çıkıyordu.
+      const cakisma =
+        cause instanceof ApiError &&
+        cause.status === 409 &&
+        !describeError(cause).includes("hakem karari verilmis");
+      if (cakisma) setYenidenAnalizOnayi(values);
       throw cause;
     }
   }
@@ -371,11 +402,52 @@ export function CompetitionManager() {
                 B'nin kriterlerini A'nın taslağıyla değiştiriyordu. Aynı
                 şekilde yükleme listesi ve arama kutusu da eski yarışmadan
                 kalıyordu. */}
-            <CriteriaTemplateForm
-              key={`kriter-${secili.id}`}
-              onSaved={sablonuKaydet}
-              submitError={kurulumHatasi}
-            />
+            <div className="flex flex-col gap-3">
+              {yenidenAnalizOnayi ? (
+                <div
+                  role="alert"
+                  data-testid="reanalysis-confirm"
+                  className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                >
+                  <p className="font-semibold">Bu değişiklik mevcut puanları geçersiz kılar.</p>
+                  <p className="mt-1 text-xs leading-relaxed">
+                    Devam ederseniz bu yarışmadaki analizler silinip yeni
+                    kurallarla yeniden çalıştırılır; böylece bütün raporlar
+                    aynı ölçütle puanlanır. Bu işlem birkaç dakika sürebilir.
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      data-testid="reanalysis-confirm-yes"
+                      onClick={() => {
+                        const degerler = yenidenAnalizOnayi;
+                        setYenidenAnalizOnayi(null);
+                        void sablonuKaydet(degerler, true).catch(() => {});
+                      }}
+                      className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+                    >
+                      Yine de değiştir ve yeniden analiz et
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="reanalysis-confirm-no"
+                      onClick={() => {
+                        setYenidenAnalizOnayi(null);
+                        setKurulumHatasi(null);
+                      }}
+                      className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                    >
+                      Vazgeç
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <CriteriaTemplateForm
+                key={`kriter-${secili.id}`}
+                onSaved={sablonuKaydet}
+                submitError={kurulumHatasi}
+              />
+            </div>
             <ReportUpload
               key={`yukleme-${secili.id}`}
               competitionId={secili.id}
