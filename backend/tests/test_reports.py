@@ -207,7 +207,7 @@ def test_report_list_serializes_analysis(client, demo_takim):
 
 
 @pytest.mark.skipif(not GERCEK_RAPOR.exists(), reason="referans KTR raporu bulunamadi")
-def test_real_pdf_produces_real_ai_scores(client, demo_takim):
+def test_real_pdf_produces_real_ai_scores(client, demo_takim, rakip_takim):
     """Gercek bir PDF ile analiz hattinin GERCEKTEN calistigini dogrular.
 
     Bu test onemli cunku diger testler sahte bayt ("%PDF-1.4 Mock")
@@ -274,7 +274,10 @@ def test_real_pdf_produces_real_ai_scores(client, demo_takim):
             data={
                 "project_name": "Kopya Proje",
                 "category_id": cat_id,
-                "team_id": demo_takim.id,
+                # BASKA takim: ayni takimin raporlari karsilastirmadan
+                # cikariliyor (kendi asamasi intihal degil), bu yuzden
+                # intihal senaryosu iki farkli takim gerektiriyor.
+                "team_id": rakip_takim.id,
             },
             files={"file": ("kopya.pdf", f, "application/pdf")},
             headers=manager,
@@ -291,7 +294,7 @@ def test_real_pdf_produces_real_ai_scores(client, demo_takim):
 
 
 @pytest.mark.skipif(not GERCEK_RAPOR.exists(), reason="referans KTR raporu bulunamadi")
-def test_okunamayan_karsilastirma_raporu_gizlenmez(client, demo_takim):
+def test_okunamayan_karsilastirma_raporu_gizlenmez(client, demo_takim, rakip_takim):
     """REGRESYON: intihal kontrolu calismadiginda "ilk basvuru" diyordu.
 
     ai-scoring yalnizca KAC raporla karsilastirdigini biliyor, kac rapor
@@ -318,11 +321,15 @@ def test_okunamayan_karsilastirma_raporu_gizlenmez(client, demo_takim):
         headers=manager,
     ).json()["id"]
 
-    def _yukle(ad):
+    def _yukle(ad, takim_id=None):
         with open(GERCEK_RAPOR, "rb") as f:
             r = client.post(
                 "/api/reports/upload",
-                data={"project_name": ad, "category_id": cat_id, "team_id": demo_takim.id},
+                data={
+                    "project_name": ad,
+                    "category_id": cat_id,
+                    "team_id": takim_id or demo_takim.id,
+                },
                 files={"file": (f"{ad}.pdf", f, "application/pdf")},
                 headers=manager,
             )
@@ -338,7 +345,9 @@ def test_okunamayan_karsilastirma_raporu_gizlenmez(client, demo_takim):
     for yol in silinen:
         os.remove(yol)
 
-    ikinci_id = _yukle("Ikinci Rapor")
+    # BASKA takim: ayni takim dislandigi icin aksi halde karsilastirilacak
+    # rapor zaten kalmaz ve test sinamak istedigi kod yoluna ulasmaz.
+    ikinci_id = _yukle("Ikinci Rapor", rakip_takim.id)
     _ata(client, manager, ikinci_id, "sim_referee@test.org")
 
     detay = client.get(f"/api/reports/{ikinci_id}", headers=referee).json()

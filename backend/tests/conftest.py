@@ -73,6 +73,23 @@ def demo_takim(db_session):
 
 
 @pytest.fixture(scope="function")
+def rakip_takim(db_session):
+    """Ikinci bir takim - INTIHAL senaryolari icin sart.
+
+    Ayni takimin raporlari benzerlik karsilastirmasindan cikariliyor (bir
+    takimin On Tasarim / Final Tasarim raporlari ayni basvurunun iki asamasi,
+    intihal degil). Dolayisiyla "kopya yakalaniyor mu" testleri iki FARKLI
+    takim kullanmak zorunda - aksi halde test, dislama yuzunden bosa gecer.
+    """
+    from app import models
+
+    takim = models.Team(id="rakip-takim", name="Rakip Takım", external_ref="KYS-TEST-2")
+    db_session.add(takim)
+    db_session.commit()
+    return takim
+
+
+@pytest.fixture(scope="function")
 def client(db_session):
     def override_get_db():
         try:
