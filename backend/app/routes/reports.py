@@ -639,6 +639,134 @@ def list_reports(
     return [_attach_analysis_results(r) for r in query.all()]
 
 
+# ARAMA UC NOKTASI - /{report_id}'DEN ONCE TANIMLANMALI.
+#
+# FastAPI rotalari TANIM SIRASINA gore esler. Bu blok asagidaki
+# @router.get("/{report_id}") satirindan SONRA gelseydi, /api/reports/lookup
+# istegi get_report(report_id="lookup") olarak eslesir ve "Report not found"
+# 404'u donerdi. Hata mesaji yetkilendirmeyi hic akla getirmez; sessiz ve
+# uzun suren bir hata olurdu. Testi bu yuzden 404 OLMADIGINI da dogruluyor.
+_ARAMA_ROLLERI = auth.RoleChecker(
+    ["REFEREE", "COMPETITION_MANAGER", "EVALUATION_MANAGER"]
+)
+
+
+def _degerlendirme_durumu(report: models.Report) -> str:
+    """Rapor durumunu kunye duzeyine INDIRGER.
+
+    approve/reject ayrimi bilerek yok: bir raporun onaylanip onaylanmadigi,
+    o rapora atanmamis bir hakemin bilmesi gereken bir sey degil.
+    """
+    if report.final_decision is not None:
+        return "degerlendirildi"
+    if report.status == "error":
+        return "hata"
+    if report.status == "pending":
+        return "analiz_bekliyor"
+    return "analiz_edildi"
+
+
+@router.get("/lookup", response_model=List[schemas.ReportLookupItem])
+def lookup_reports(
+    report_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    email: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(_ARAMA_ROLLERI),
+):
+    """Basvuru kimligi / takim kimligi / yarismaci e-postasi ile rapor arar.
+
+    NEDEN AYRI BIR UC NOKTA: hakem kendisine ATANMAMIS raporlari da
+    arayabilmeli ("bu basvuruya kim bakiyor?"), ama bu bir GEVSETME - bu
+    oturumda tam tersi bir acik kapatildi (atanmamis hakem baska bir
+    yarismacinin tam AI analizini okuyabiliyordu). Gevsetmeyi savunulabilir
+    kilan uc sey:
+
+      1. Yanit KUNYE ile sinirli. Mevcut /api/reports uc noktasina ?q=
+         eklemek en kolay yol olurdu ama o ucun yanit modeli ai_analysis ve
+         final_decision iceriyor - yani kapatilan acigi geri acardi.
+      2. Arama TAM ESLESME. Substring/joker/bos sorgu YOK: substring
+         araması envanter taramaktir, tam eslesme "elimde zaten olan bir
+         kimligi cozumle" demektir.
+      3. Atanmamis erisimler IZ BIRAKIYOR (ReportAccessLog).
+
+    Yarismaci bu uc noktayi kullanamaz (kullanicinin istegi: "ayni aramayi
+    basvuran yarismaci HARIC her rol yapabilecek"). Yetki RoleChecker'da -
+    arayuzde dugmeyi gizlemek yeterli olmazdi.
+    """
+    verilenler = [x for x in (report_id, team_id, email) if x]
+    if len(verilenler) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Tam olarak bir arama olcutu verin: report_id, team_id ya da "
+                "email. Bos ya da coklu sorgu kabul edilmiyor."
+            ),
+        )
+
+    q = db.query(models.Report)
+    if report_id:
+        q = q.filter(models.Report.id == report_id)
+        anahtar = "report_id"
+    elif team_id:
+        q = q.filter(models.Report.team_id == team_id)
+        anahtar = "team_id"
+    else:
+        # E-posta buyuk/kucuk harf duyarsiz ama TAM eslesme.
+        kullanici = (
+            db.query(models.User)
+            .filter(models.User.email.ilike(email.strip()))
+            .first()
+        )
+        if not kullanici:
+            return []
+        takim_kimlikleri = [
+            m.team_id
+            for m in db.query(models.TeamMember)
+            .filter(models.TeamMember.user_id == kullanici.id)
+            .all()
+        ]
+        kosul = models.Report.submitted_by_id == kullanici.id
+        if takim_kimlikleri:
+            kosul = kosul | models.Report.team_id.in_(takim_kimlikleri)
+        q = q.filter(kosul)
+        anahtar = "email"
+
+    aktif = getattr(current_user, "active_role", None)
+    sonuc = []
+    for r in q.order_by(models.Report.submission_date.desc()).limit(50).all():
+        atanmis = r.assignment is not None and r.assignment.referee_id == current_user.id
+        tam_yetki = atanmis or aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER")
+
+        if not tam_yetki:
+            db.add(
+                models.ReportAccessLog(
+                    id=str(uuid.uuid4()),
+                    report_id=r.id,
+                    user_id=current_user.id,
+                    lookup_by=anahtar,
+                )
+            )
+
+        sonuc.append(
+            {
+                "report_id": r.id,
+                "project_name": r.project_name,
+                "team_name": r.team.name if r.team else None,
+                "competition_name": r.competition.name if r.competition else None,
+                "evaluation_state": _degerlendirme_durumu(r),
+                "assigned_referee_email": (
+                    r.assignment.referee.email
+                    if r.assignment and r.assignment.referee
+                    else None
+                ),
+                "access": "assigned" if tam_yetki else "metadata_only",
+            }
+        )
+    db.commit()
+    return sonuc
+
+
 @router.get("/{report_id}", response_model=schemas.ReportResponse)
 def get_report(
     report_id: str,

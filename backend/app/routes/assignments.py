@@ -11,6 +11,7 @@ AKIS:
   3. Yonetici gerekirse tek bir raporun hakemini degistirir (PUT /{report_id})
 """
 
+import hashlib
 import uuid
 from typing import List, Optional
 
@@ -145,6 +146,7 @@ def add_referee_to_competition(
 )
 def auto_assign(
     competition_id: str,
+    secenekler: Optional[schemas.AutoAssignOptions] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(_YONETICI),
 ):
@@ -173,6 +175,26 @@ def auto_assign(
             detail="Bu yarismada gorevli hakem yok. Once hakem ekleyin.",
         )
 
+    secenekler = secenekler or schemas.AutoAssignOptions()
+    havuz_daraltildi = False
+
+    # HAVUZU ELLE SEC: yonetici "bu dagitima yalnizca su hakemler girsin"
+    # diyebilmeli (uzmanlik alani, musaitlik, cikar catismasi...).
+    if secenekler.referee_ids:
+        istenen = set(secenekler.referee_ids)
+        gorevli_kimlikler = {h.id for h in hakemler}
+        yabanci = istenen - gorevli_kimlikler
+        if yabanci:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"{len(yabanci)} hakem bu yarismada gorevli degil. "
+                    "Once yarismaya ekleyin."
+                ),
+            )
+        hakemler = [h for h in hakemler if h.id in istenen]
+        havuz_daraltildi = True
+
     atanmamis = (
         db.query(models.Report)
         .outerjoin(models.Assignment)
@@ -197,6 +219,15 @@ def auto_assign(
             .count()
         )
 
+    # "EN AZ YUKLU N HAKEM": kullanicinin "rastgele en az projeden sorumlu
+    # olan hakeme direkt ekleyebilsin" istegi. Yuk hesaplandiktan SONRA
+    # uygulaniyor - once yuke gore siralayip sonra kesiyoruz.
+    if secenekler.limit_least_loaded:
+        hakemler = sorted(hakemler, key=lambda h: (yuk[h.id], h.email))[
+            : secenekler.limit_least_loaded
+        ]
+        havuz_daraltildi = True
+
     yeni = []
     atlanan = []
     for rapor in atanmamis:
@@ -211,15 +242,30 @@ def auto_assign(
                 {
                     "report_id": rapor.id,
                     "reason": (
-                        "Yarismadaki tek uygun hakem raporun sahibi takimda; "
-                        "cikar catismasi nedeniyle atanmadi. Baska bir hakem ekleyin."
+                        "Havuzdaki tek uygun hakem raporun sahibi takimda; cikar "
+                        "catismasi nedeniyle atanmadi. "
+                        + (
+                            "Dagitim havuzunu genisletin ya da bu raporu elle atayin."
+                            if havuz_daraltildi
+                            else "Yarismaya baska bir hakem ekleyin."
+                        )
                     ),
                 }
             )
             continue
-        # En az yuklu hakem; esitlikte e-postaya gore deterministik secim
-        # (ayni girdi her zaman ayni dagitimi versin diye)
-        hedef = min(uygun, key=lambda h: (yuk[h.id], h.email))
+        # En az yuklu hakem. Esitlikte RAPOR BAZLI deterministik secim:
+        # alfabetik e-posta siralamasi, esit yuklu hakemler arasinda hep
+        # ayni kisiyi one aliyordu - yani "adi 'a' ile baslayan hakem" her
+        # esitligi kazaniyordu. Rapor kimligiyle harmanlanmis sira hem
+        # dagilimi esitliyor hem de tekrarlanabilir kaliyor (ayni girdi ->
+        # ayni dagitim; testler ve denetim icin sart).
+        hedef = min(
+            uygun,
+            key=lambda h: (
+                yuk[h.id],
+                hashlib.sha256(f"{rapor.id}:{h.id}".encode()).hexdigest(),
+            ),
+        )
         db.add(
             models.Assignment(
                 id=str(uuid.uuid4()),

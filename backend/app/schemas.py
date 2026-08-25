@@ -103,6 +103,29 @@ class TemplateExtractResult(BaseModel):
     warnings: List[str] = []
 
 
+class ReportLookupItem(BaseModel):
+    """Arama sonucu - KUNYE duzeyinde, degerlendirme icerigi YOK.
+
+    Bilerek DISARIDA birakilanlar: ai_analysis (puan/gerekce/benzerlik
+    bulgulari), final_decision (puan/gerekce), dosya yolu ve yarismaci
+    kimligi. Arama "elimdeki kimligi cozumle" icindir, "envanteri tara"
+    icin degil.
+    """
+    report_id: str
+    project_name: str
+    team_name: Optional[str] = None
+    competition_name: Optional[str] = None
+    # analiz_bekliyor | analiz_edildi | degerlendirildi | hata
+    # Onay/ret AYRIMI YOK: bir raporun ONAYLANIP onaylanmadigi, o rapora
+    # atanmamis bir hakemin bilmesi gereken bir sey degil.
+    evaluation_state: str
+    # Aramanin asil cevabi: "bu rapora kim bakiyor?"
+    assigned_referee_email: Optional[EmailStr] = None
+    # assigned  -> tam detaya yetkiniz var (arayuz oraya yonlendirir)
+    # metadata_only -> yalnizca bu kunye
+    access: str
+
+
 class CompetitionStatusUpdate(BaseModel):
     status: str
 
@@ -156,6 +179,23 @@ class RefereeLoad(BaseModel):
     referee_id: str
     email: EmailStr
     assigned_count: int
+
+class AutoAssignOptions(BaseModel):
+    """Otomatik dagitim havuzunu daraltma secenekleri.
+
+    Kullanicinin istegi: "hakemi olmayan raporlara KAC HAKEM eklenecegini,
+    HANGILERININ eklenecegini de belirleyebilsin."
+
+    Bu, rapor basina kac hakem DEGIL (o hala tek), DAGITIM HAVUZUNA kac/hangi
+    hakem girecegi demek. Ikisi de verilmezse davranis eskisi gibi: yarismada
+    gorevli TUM hakemler havuza girer.
+    """
+    # Havuzu elle sec. Bos/verilmemisse yarismanin tum gorevli hakemleri.
+    referee_ids: Optional[List[str]] = None
+    # "En az yuklu N hakemi tek tikla havuz yap." Kullanicinin "rastgele en az
+    # projeden sorumlu olan hakeme direkt ekleyebilsin" istegi bu.
+    limit_least_loaded: Optional[int] = Field(default=None, ge=1, le=100)
+
 
 class SkippedAssignment(BaseModel):
     report_id: str

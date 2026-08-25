@@ -276,6 +276,37 @@ class TeamMember(Base):
     user = relationship("User")
 
 
+class ReportAccessLog(Base):
+    """Hakemin KENDISINE ATANMAMIS bir rapora kunye duzeyinde erisimi.
+
+    NEDEN VAR: hakemin atanmamis raporlari arayabilmesi bilincli bir
+    GEVSETME. Bu oturumda tam tersi bir acik kapatildi ("atanmamis hakem
+    baska bir yarismacinin tam AI analizini okuyabiliyordu"). Gevsetmeyi
+    savunulabilir kilan sey, erisimin (a) yalnizca kunyeyle sinirli olmasi
+    ve (b) IZ BIRAKMASI. Iz birakmayan bir gevsetme, kapattigimiz acigin
+    daha kucuk bir kopyasi olurdu.
+
+    Yalnizca ATANMAMIS erisimler yaziliyor: atanmis hakemin kendi raporunu
+    okumasi normal is akisi, loglanirsa kayit gurultuye bogulur ve icinden
+    gercek anormallik secilemez.
+
+    Kaydi Degerlendirme Yoneticisi okur - sartname: "degerlendirme akisini
+    izler; gerekli operasyonel aksiyonlari yonetir."
+    """
+
+    __tablename__ = "report_access_log"
+
+    id = Column(String, primary_key=True, index=True)
+    report_id = Column(String, ForeignKey("reports.id"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # Hangi anahtarla arandi: report_id | team_id | email
+    lookup_by = Column(String, nullable=False)
+    accessed_at = Column(DateTime, default=_utcnow, index=True)
+
+    report = relationship("Report")
+    user = relationship("User")
+
+
 class Report(Base):
     __tablename__ = "reports"
 

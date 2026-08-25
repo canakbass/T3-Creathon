@@ -428,7 +428,11 @@ def main():
             data={
                 "project_name": "Kopya Proje",
                 "competition_id": yar_id,
-                "team_id": TAKIM,
+                # BASKA takim: ayni takimin raporlari karsilastirmadan
+                # cikariliyor (bir takimin On Tasarim / Final Tasarim
+                # raporlari ayni basvurunun iki asamasi, intihal degil).
+                # Gercek intihal senaryosu iki FARKLI takim gerektiriyor.
+                "team_id": "team-zebot",
             },
             files={"file": ("kopya.pdf", f, "application/pdf")},
             headers=yonetici,
@@ -448,6 +452,40 @@ def main():
             "kapali yarismaya yukleme reddediliyor",
             kopya.status_code == 400,
             kopya.text[:80],
+        )
+
+    # Ayni takim iki asama gonderirse INTIHAL SAYILMAMALI (sartname iki
+    # raporu da zorunlu kiliyor).
+    #
+    # BASKA BIR BELGE kullaniyoruz (ORNEK_RAPORLAR[3]): yukarida "Kopya
+    # Proje" testi ORNEK_RAPORLAR[0]'i team-zebot adina yukledi. Ayni belgeyi
+    # burada tekrar kullansaydik, Glieser'in ikinci asamasi kendi raporuyla
+    # DEGIL Zebot'un kopyasiyla eslesir ve test yanlis sebeple duserdi -
+    # ustelik o eslesme dogru davranis olurdu.
+    def _asama_yukle(ad, dosya):
+        with open(dosya, "rb") as f:
+            return c.post(
+                "/api/reports/upload",
+                data={"project_name": ad, "competition_id": yar_id, "team_id": TAKIM},
+                files={"file": (f"{ad}.pdf", f, "application/pdf")},
+                headers=yonetici,
+            )
+
+    ilk_asama = _asama_yukle("Glieser Birinci Asama", ORNEK_RAPORLAR[3])
+    if ilk_asama.status_code == 201:
+        analiz_bekle(ilk_asama.json()["id"], yonetici)
+    kendi = _asama_yukle("Glieser Ikinci Asama", ORNEK_RAPORLAR[3])
+    if kendi.status_code == 201:
+        kd2 = analiz_bekle(kendi.json()["id"], yonetici)
+        b2 = (kd2.get("ai_analysis") or {}).get("results", {}).get("similarity", {})
+        kontrol(
+            "takimin KENDI raporu intihal sayilmiyor",
+            b2.get("score") == 0,
+            str(b2.get("score")),
+        )
+        kontrol(
+            "dislama bulgularda aciga cikariliyor",
+            any("karşılaştırma dışı" in x for x in b2.get("findings", [])),
         )
 
     print(f"\n{'=' * 52}\n{gecti} gecti, {kaldi} kaldi")
