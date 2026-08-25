@@ -108,8 +108,23 @@ def main():
     yonetici = rol_sec(yon_giris, "COMPETITION_MANAGER")
     kontrol("yonetici girisi", yon_giris.get("active_role") == "COMPETITION_MANAGER")
 
-    yarismaci_eposta, yar_giris, _ = kaydol_giris(["COMPETITOR"], "yarismaci")
-    yarismaci = rol_sec(yar_giris, "COMPETITOR")
+    # Yarismaci taraflari SEED'lenmis takim uyeleri.
+    #
+    # NEDEN kaydol_giris DEGIL: rapor artik bir TAKIMA ait ve takim
+    # olusturma icin API ucu YOK (bilincli: gercek kayitlar TEKNOFEST'in
+    # kendi sisteminde/KYS'de tutuluyor, biz o veriyi tuketiyoruz). Bu
+    # yuzden E2E, demo edilecek seed verisinin ta kendisini kullaniyor:
+    #   team-glieser -> competitor@ (kaptan) + competitor2@ (uye)
+    #   team-adyu    -> competitor@ (uye)     <- ayni kisi IKI takimda
+    #   team-zebot   -> rakip@                <- digerlerini GOREMEZ
+    def _giris(eposta, sifre="password123"):
+        j = c.post("/api/auth/login", data={"username": eposta, "password": sifre}).json()
+        return {"Authorization": f"Bearer {j['access_token']}"}
+
+    TAKIM = "team-glieser"
+    yarismaci = _giris("competitor2@teknofest.org")   # yalnizca team-glieser
+    takim_arkadasi = _giris("competitor@teknofest.org")  # glieser + adyu
+    rakip = _giris("rakip@teknofest.org")             # team-zebot
 
     hakem1_eposta, h1_giris, _ = kaydol_giris(["REFEREE"], "hakem1")
     hakem1 = rol_sec(h1_giris, "REFEREE")
@@ -261,6 +276,53 @@ def main():
         c.get(f"/api/reports/{rapor_id}", headers=yarismaci).status_code == 200,
     )
 
+    # ---------------------------------------------------------- takim
+    bolum("Takim gorunurlugu")
+    kontrol(
+        "takim ARKADASI raporu goruyor (yukleyen o degil)",
+        c.get(f"/api/reports/{rapor_id}", headers=takim_arkadasi).status_code == 200,
+    )
+    kontrol(
+        "takim arkadasi DOSYAYI indirebiliyor",
+        c.get(f"/api/reports/{rapor_id}/file", headers=takim_arkadasi).status_code == 200,
+    )
+    kontrol(
+        "BASKA takimdan biri goremiyor",
+        c.get(f"/api/reports/{rapor_id}", headers=rakip).status_code == 403,
+    )
+    kontrol(
+        "baska takim listede de gormuyor",
+        all(x["id"] != rapor_id for x in c.get("/api/reports", headers=rakip).json()),
+    )
+    kontrol(
+        "rapor TAKIM ADIYLA donuyor",
+        c.get(f"/api/reports/{rapor_id}", headers=yonetici).json().get("team_name") == "Glieser",
+    )
+    with open(ORNEK_RAPORLAR[2], "rb") as f:
+        sahipsiz = c.post(
+            "/api/reports/upload",
+            data={"project_name": "Sahipsiz", "competition_id": yar_id},
+            files={"file": (ORNEK_RAPORLAR[2].name, f, "application/pdf")},
+            headers=yonetici,
+        )
+    kontrol(
+        "yonetici TAKIMSIZ rapor aktaramiyor",
+        sahipsiz.status_code == 400,
+        f"HTTP {sahipsiz.status_code}",
+    )
+    with open(ORNEK_RAPORLAR[2], "rb") as f:
+        cift = c.post(
+            "/api/reports/upload",
+            data={"project_name": "Belirsiz", "competition_id": yar_id},
+            files={"file": (ORNEK_RAPORLAR[2].name, f, "application/pdf")},
+            headers=takim_arkadasi,
+        )
+    kontrol(
+        "iki takimli yarismaci TAKIM SECMEK zorunda",
+        cift.status_code == 400,
+        f"HTTP {cift.status_code}",
+    )
+
     # ------------------------------------------------------------- karar
     bolum("Hakem karari")
     taslak = c.post(f"/api/reports/{rapor_id}/rationale-draft", headers=hakem1)
@@ -363,7 +425,11 @@ def main():
     with open(ORNEK_RAPORLAR[0], "rb") as f:
         kopya = c.post(
             "/api/reports/upload",
-            data={"project_name": "Kopya Proje", "competition_id": yar_id},
+            data={
+                "project_name": "Kopya Proje",
+                "competition_id": yar_id,
+                "team_id": TAKIM,
+            },
             files={"file": ("kopya.pdf", f, "application/pdf")},
             headers=yonetici,
         )

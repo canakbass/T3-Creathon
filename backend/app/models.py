@@ -215,6 +215,67 @@ class Criteria(Base):
     category = relationship("Category", back_populates="criteria_list")
 
 
+# Takim uyeliginde kisinin gorevi. TEKNOFEST 2026 Genel Sartnamesi'nden:
+#   "Takim Kaptani: Takimin organizasyonundan sorumlu olan ve sureclerde
+#    liderlik gorevini ustlenen kisi"
+#   "Takim Danismani: Her takim icin EN FAZLA BIR (1) ogretmen/egitmen/
+#    akademisyen"
+TAKIM_GOREVLERI = ("kaptan", "uye", "danisman")
+
+
+class Team(Base):
+    """Basvuru birimi: TAKIM.
+
+    NEDEN VAR: TEKNOFEST'te basvuruyu bir KISI degil bir TAKIM yapiyor
+    (2026 Genel Sartname: takim kaptani + uyeler + en fazla bir danisman).
+    Sistemimizde ise rapor yalnizca `submitted_by_id` ile bir KISIYE
+    bagliydi ve bunun iki somut sonucu vardi:
+      * Takim arkadasi kendi takiminin sonucunu GOREMIYORDU.
+      * Yonetici bir raporu sisteme aktardiginda (sartname AKIS 01: "raporlari
+        sisteme aktarir") rapor YONETICININ raporu oluyor ve HICBIR yarismaci
+        sonucunu goremiyordu.
+
+    TAKIM YONETIMI BU SISTEMIN ISI DEGIL. Gercek kayitlar TEKNOFEST'in kendi
+    sisteminde (KYS / t3kys.com) tutuluyor; sartname raporlarin oraya teslim
+    edildigini soyluyor. Biz o veriyi TUKETEN bir degerlendirme katmaniyiz.
+    Bu yuzden takim olusturma/uye duzenleme icin arayuz YOK; kayitlar
+    disaridan besleniyor (`external_ref` eslestirme anahtari) ve demo icin
+    seed ediliyor.
+    """
+
+    __tablename__ = "teams"
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    # KYS'deki takim kimligi. Gercek entegrasyonda eslestirme bu alandan
+    # yapilir; bizim id'lerimiz KYS'nin id'leri olmak zorunda degil.
+    external_ref = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime, default=_utcnow)
+
+    members = relationship(
+        "TeamMember", back_populates="team", cascade="all, delete-orphan", lazy="selectin"
+    )
+    reports = relationship("Report", back_populates="team")
+
+    @property
+    def member_ids(self) -> set:
+        return {m.user_id for m in self.members}
+
+
+class TeamMember(Base):
+    __tablename__ = "team_members"
+    __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_takim_uye"),)
+
+    id = Column(String, primary_key=True, index=True)
+    team_id = Column(String, ForeignKey("teams.id"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # kaptan | uye | danisman  (bkz. TAKIM_GOREVLERI)
+    role = Column(String, nullable=False, default="uye")
+
+    team = relationship("Team", back_populates="members")
+    user = relationship("User")
+
+
 class Report(Base):
     __tablename__ = "reports"
 
@@ -230,9 +291,37 @@ class Report(Base):
     # kullaniyoruz; diskteki ad RPT-2026-XXXXXX.pdf seklinde normalize edilmis.
     original_filename = Column(String, nullable=True)
     submitted_by_id = Column(String, ForeignKey("users.id"), nullable=False)
+    # Raporun SAHIBI takim. `submitted_by_id` yalnizca YUKLEYENI soyluyor ve
+    # ikisi ayni kisi olmak zorunda degil: sartname AKIS 01, yarisma
+    # yoneticisinin raporlari sisteme AKTARDIGINI soyluyor. Sonucu kimin
+    # gorecegi buradan belirleniyor, yukleyenden degil.
+    #
+    # nullable: yarisma akisi devreye girmeden once yuklenmis eski kayitlar
+    # ve takim kavrami olmayan test/demo raporlari icin. Takimi olmayan
+    # raporda erisim eski davranisa (yalnizca yukleyen) dusuyor.
+    team_id = Column(String, ForeignKey("teams.id"), nullable=True, index=True)
     submission_date = Column(DateTime, default=_utcnow)
 
     submitted_by = relationship("User", back_populates="reports")
+    team = relationship("Team", back_populates="reports")
+
+    def cikar_catismasi_var_mi(self, hakem) -> bool:
+        """Bu hakem bu raporu degerlendiremez mi.
+
+        NEDEN MODELDE: kural uc ayri yerde uygulanmak zorunda (otomatik
+        dagitim, elle atama, karar). Uc kopya kacinilmaz olarak birbirinden
+        ayrisir; tek tanim burada.
+
+        NEDEN SUBMITTED_BY YETMIYOR: takim kavrami eklendikten sonra raporun
+        SAHIBI takim, yukleyen degil. Sartname AKIS 01'de raporu yarisma
+        yoneticisi de aktarabiliyor; o durumda `submitted_by_id` yoneticidir
+        ve takimin bir uyesi ayni zamanda hakemse "yukleyen mi" kontrolu
+        BOSA DUSER. Yani kisi kendi takiminin raporunu onaylayabilirdi.
+        """
+        if self.team_id and self.team is not None:
+            if hakem.id in self.team.member_ids:
+                return True
+        return hakem.id == self.submitted_by_id
     category = relationship("Category")
     competition = relationship("Competition", back_populates="reports")
     ai_analysis = relationship("AiAnalysis", back_populates="report", uselist=False)

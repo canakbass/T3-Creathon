@@ -110,7 +110,22 @@ def uzak_storage(tmp_path, monkeypatch):
 
     sahte = SahteBucket()
     monkeypatch.setattr(modul, "_bucket", lambda: sahte)
-    return modul, sahte
+    yield modul, sahte
+
+    # MODULU GERI YUKLE.
+    #
+    # `monkeypatch` ORTAM DEGISKENLERINI geri aliyor ama yukarida
+    # `importlib.reload` ile modul zaten yeniden yuklendi ve `_URL` / `_KEY`
+    # modul duzeyinde (storage.py:42-43) SABITLENDI. Ortam temizlense de
+    # modul "Supabase yapilandirilmis" durumda kaliyor.
+    #
+    # Sonucu: bu dosyadan SONRA calisan her test dosyasinda uygulama acilisi
+    # ensure_bucket() -> `import storage3` deniyor ve ModuleNotFoundError
+    # veriyor. Sizinti alfabetik siraya bagli oldugu icin uzun sure gorunmez
+    # kaldi; test_teams.py eklenince (test_storage'dan sonra geliyor) 9 test
+    # birden setup asamasinda patladi.
+    monkeypatch.undo()
+    importlib.reload(storage_modulu)
 
 
 def test_uzak_yapilandirmada_acik(uzak_storage):

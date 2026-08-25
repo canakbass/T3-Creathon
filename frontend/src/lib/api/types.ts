@@ -154,6 +154,13 @@ export interface WireReport {
   submission_date: string;
   original_filename: string | null;
   competition_id: string | null;
+  /**
+   * Raporun SAHIBI takım. Sonucu kimin göreceğini bu belirliyor;
+   * `submitted_by_id` yalnızca YÜKLEYENİ söylüyor ve ikisi aynı olmak
+   * zorunda değil (şartname AKIŞ 01: raporları yönetici de aktarabilir).
+   */
+  team_id: string | null;
+  team_name: string | null;
   ai_analysis: WireAiAnalysis | null;
   final_decision: WireFinalDecision | null;
   /** Atanan hakem — listede de geliyor, ayrı istek gerekmiyor. */

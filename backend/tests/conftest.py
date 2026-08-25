@@ -52,6 +52,27 @@ def db_session():
 
 
 @pytest.fixture(scope="function")
+def demo_takim(db_session):
+    """Yoneticinin rapor aktarabilmesi icin bir takim.
+
+    NEDEN GEREKLI: yonetici aktariminda `team_id` ZORUNLU. Sartname AKIS 01
+    yoneticinin "raporlari sisteme aktardigini" soyluyor; ama rapor bir
+    takima baglanmazsa sahipsiz kalir ve sonucunu hicbir yarismaci goremez -
+    AKIS 03 ("yarismaci sonucunu goruntuler") karsilanmaz.
+
+    Takim olusturma icin API UCU YOK ve olmayacak: gercek kayitlar
+    TEKNOFEST'in kendi sisteminde (KYS) tutuluyor, biz o veriyi tuketiyoruz.
+    Bu yuzden testlerde de dogrudan veri tabanina yaziyoruz.
+    """
+    from app import models
+
+    takim = models.Team(id="test-takim", name="Test Takımı", external_ref="KYS-TEST-1")
+    db_session.add(takim)
+    db_session.commit()
+    return takim
+
+
+@pytest.fixture(scope="function")
 def client(db_session):
     def override_get_db():
         try:

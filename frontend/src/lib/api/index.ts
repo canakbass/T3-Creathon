@@ -175,6 +175,9 @@ export interface ReportRow {
   assignedRefereeEmail: string | null;
   hasDecision: boolean;
   competitionId: string | null;
+  /** Raporun sahibi takım — arama takım adıyla da yapılabiliyor. */
+  teamId: string | null;
+  teamName: string | null;
 }
 
 export async function listReportRows(): Promise<ReportRow[]> {
@@ -188,6 +191,8 @@ export async function listReportRows(): Promise<ReportRow[]> {
     assignedRefereeEmail: r.assigned_referee_email,
     hasDecision: r.final_decision !== null,
     competitionId: r.competition_id,
+    teamId: r.team_id,
+    teamName: r.team_name,
   }));
 }
 
@@ -224,6 +229,11 @@ export async function getReport(
 
 export interface UploadReportInput {
   projectName: string;
+  /**
+   * Raporun sahibi takım. Yönetici aktarımında ZORUNLU — aksi halde rapor
+   * sahipsiz kalır ve sonucunu hiçbir yarışmacı göremez.
+   */
+  teamId?: string | null;
   /** Yarışma verilirse kategori ondan alınır; ayrıca seçmeye gerek yok. */
   competitionId?: string;
   categoryId?: string;
@@ -239,6 +249,7 @@ export async function uploadReport(input: UploadReportInput): Promise<Evaluation
   form.append("project_name", input.projectName);
   if (input.competitionId) form.append("competition_id", input.competitionId);
   if (input.categoryId) form.append("category_id", input.categoryId);
+  if (input.teamId) form.append("team_id", input.teamId);
   form.append("file", input.file);
 
   const wire = await apiFetch<WireReport>("/api/reports/upload", {

@@ -29,6 +29,8 @@ function satir(reportId: string, competitionId: string | null): ReportRow {
     assignedRefereeEmail: null,
     hasDecision: false,
     competitionId,
+    teamId: null,
+    teamName: null,
   };
 }
 

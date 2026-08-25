@@ -80,6 +80,14 @@ def seed_db():
                  ["REFEREE"]),
                 ("competitor@teknofest.org", "password123", "Demo Yarışmacı",
                  ["COMPETITOR"]),
+                # Takim arkadaslari: "takimdaki HERKES sonucu gorebilmeli"
+                # kuralinin demo edilebilmesi icin en az iki uye gerekiyor.
+                ("competitor2@teknofest.org", "password123", "Takım Arkadaşı",
+                 ["COMPETITOR"]),
+                # BASKA bir takimin uyesi: "takimda degilsen GOREMEZSIN"
+                # kuralini gostermek icin.
+                ("rakip@teknofest.org", "password123", "Rakip Takım Üyesi",
+                 ["COMPETITOR"]),
                 ("evaluator@teknofest.org", "password123", "Demo Değerlendirme Yöneticisi",
                  ["EVALUATION_MANAGER"]),
                 # COK-ROLLU TEST HESABI: dort rolun hepsine sahip. Giriste
@@ -101,7 +109,49 @@ def seed_db():
                         id=str(uuid.uuid4()), user_id=db_user.id, role=rol
                     ))
             db.commit()
-            
+
+        # --- Takimlar -------------------------------------------------------
+        #
+        # TAKIM YONETIMI BU SISTEMIN ISI DEGIL. Gercek kayitlar TEKNOFEST'in
+        # kendi sisteminde (KYS / t3kys.com) tutuluyor; sartname raporlarin
+        # oraya teslim edildigini soyluyor. Biz o veriyi TUKETEN bir
+        # degerlendirme katmaniyiz - bu yuzden takim olusturma/uye duzenleme
+        # arayuzu YOK, kayitlar disaridan besleniyor. `external_ref` gercek
+        # entegrasyonda eslestirme anahtari; burada demo icin seed ediliyor.
+        #
+        # Kurulan demo yapisi (kullanicinin istedigi gibi):
+        #   Glieser      -> competitor@ (kaptan) + competitor2@ (uye)
+        #   ADYU AI TEAM -> competitor@ (uye)      <- ayni kisi IKI takimda
+        #   Zebot        -> rakip@ (kaptan)        <- digerlerini GOREMEZ
+        if db.query(models.Team).count() == 0:
+            print("Seeding demo teams...")
+
+            def _kullanici(eposta):
+                return db.query(models.User).filter(models.User.email == eposta).first()
+
+            takimlar = [
+                ("team-glieser", "Glieser", "KYS-2026-000431",
+                 [("competitor@teknofest.org", "kaptan"),
+                  ("competitor2@teknofest.org", "uye")]),
+                ("team-adyu", "ADYU AI TEAM", "KYS-2026-000902",
+                 [("competitor@teknofest.org", "uye")]),
+                ("team-zebot", "Zebot", "KYS-2026-001177",
+                 [("rakip@teknofest.org", "kaptan")]),
+            ]
+            for takim_id, ad, dis_ref, uyeler in takimlar:
+                db.add(models.Team(id=takim_id, name=ad, external_ref=dis_ref))
+                db.flush()
+                for eposta, gorev in uyeler:
+                    u = _kullanici(eposta)
+                    if u:
+                        db.add(models.TeamMember(
+                            id=str(uuid.uuid4()),
+                            team_id=takim_id,
+                            user_id=u.id,
+                            role=gorev,
+                        ))
+            db.commit()
+
         # Check if categories are seeded
         if db.query(models.Category).count() == 0:
             print("Seeding default categories...")

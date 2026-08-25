@@ -141,7 +141,7 @@ def test_report_lifecycle(client):
     assert status_check_res.json()["status"] == "approved"
 
 
-def test_report_list_serializes_analysis(client):
+def test_report_list_serializes_analysis(client, demo_takim):
     """REGRESYON: GET /api/reports, analiz edilmis rapor varsa HTTP 500 veriyordu.
 
     schemas.AiAnalysisResponse `results` alanini zorunlu tutuyor ama bu bir
@@ -168,7 +168,11 @@ def test_report_list_serializes_analysis(client):
 
     upload = client.post(
         "/api/reports/upload",
-        data={"project_name": "Liste Serilestirme Testi", "category_id": cat_id},
+        data={
+            "project_name": "Liste Serilestirme Testi",
+            "category_id": cat_id,
+            "team_id": demo_takim.id,
+        },
         files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
         headers=manager,
     )
@@ -203,7 +207,7 @@ def test_report_list_serializes_analysis(client):
 
 
 @pytest.mark.skipif(not GERCEK_RAPOR.exists(), reason="referans KTR raporu bulunamadi")
-def test_real_pdf_produces_real_ai_scores(client):
+def test_real_pdf_produces_real_ai_scores(client, demo_takim):
     """Gercek bir PDF ile analiz hattinin GERCEKTEN calistigini dogrular.
 
     Bu test onemli cunku diger testler sahte bayt ("%PDF-1.4 Mock")
@@ -227,7 +231,11 @@ def test_real_pdf_produces_real_ai_scores(client):
     with open(GERCEK_RAPOR, "rb") as f:
         upload = client.post(
             "/api/reports/upload",
-            data={"project_name": "IHA Nesne Tespiti", "category_id": cat_id},
+            data={
+                "project_name": "IHA Nesne Tespiti",
+                "category_id": cat_id,
+                "team_id": demo_takim.id,
+            },
             files={"file": (GERCEK_RAPOR.name, f, "application/pdf")},
             headers=manager,
         )
@@ -263,7 +271,11 @@ def test_real_pdf_produces_real_ai_scores(client):
     with open(GERCEK_RAPOR, "rb") as f:
         kopya = client.post(
             "/api/reports/upload",
-            data={"project_name": "Kopya Proje", "category_id": cat_id},
+            data={
+                "project_name": "Kopya Proje",
+                "category_id": cat_id,
+                "team_id": demo_takim.id,
+            },
             files={"file": ("kopya.pdf", f, "application/pdf")},
             headers=manager,
         )
@@ -279,7 +291,7 @@ def test_real_pdf_produces_real_ai_scores(client):
 
 
 @pytest.mark.skipif(not GERCEK_RAPOR.exists(), reason="referans KTR raporu bulunamadi")
-def test_okunamayan_karsilastirma_raporu_gizlenmez(client):
+def test_okunamayan_karsilastirma_raporu_gizlenmez(client, demo_takim):
     """REGRESYON: intihal kontrolu calismadiginda "ilk basvuru" diyordu.
 
     ai-scoring yalnizca KAC raporla karsilastirdigini biliyor, kac rapor
@@ -310,7 +322,7 @@ def test_okunamayan_karsilastirma_raporu_gizlenmez(client):
         with open(GERCEK_RAPOR, "rb") as f:
             r = client.post(
                 "/api/reports/upload",
-                data={"project_name": ad, "category_id": cat_id},
+                data={"project_name": ad, "category_id": cat_id, "team_id": demo_takim.id},
                 files={"file": (f"{ad}.pdf", f, "application/pdf")},
                 headers=manager,
             )

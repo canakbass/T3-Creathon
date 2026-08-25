@@ -288,6 +288,11 @@ class ReportResponse(ReportBase):
     file_path: str
     original_filename: Optional[str] = None
     competition_id: Optional[str] = None
+    # Raporun SAHIBI takim. Sonucu kimin gorecegini bu belirliyor -
+    # submitted_by_id yalnizca YUKLEYENI soyluyor ve ikisi ayni olmak
+    # zorunda degil (sartname AKIS 01: yonetici raporlari sisteme aktarir).
+    team_id: Optional[str] = None
+    team_name: Optional[str] = None
     submitted_by_id: str
     submission_date: datetime
     ai_analysis: Optional[AiAnalysisResponse] = None

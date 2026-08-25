@@ -205,14 +205,14 @@ def auto_assign(
         # icin bu gercek bir durum (deneme hesaplarinda oldugu gibi) -
         # onceden bir kullanici kendi raporunu yukleyip kendine atanip
         # kendine 100 verebiliyordu.
-        uygun = [h for h in hakemler if h.id != rapor.submitted_by_id]
+        uygun = [h for h in hakemler if not rapor.cikar_catismasi_var_mi(h)]
         if not uygun:
             atlanan.append(
                 {
                     "report_id": rapor.id,
                     "reason": (
-                        "Yarismadaki tek uygun hakem raporun sahibi; cikar "
-                        "catismasi nedeniyle atanmadi. Baska bir hakem ekleyin."
+                        "Yarismadaki tek uygun hakem raporun sahibi takimda; "
+                        "cikar catismasi nedeniyle atanmadi. Baska bir hakem ekleyin."
                     ),
                 }
             )
@@ -270,12 +270,12 @@ def reassign(
     # CIKAR CATISMASI: kimse kendi raporunun hakemi olamaz. Elle atamada da
     # gecerli - otomatik dagitimda engelleyip burada birakmak, kurali tek
     # bir tiklamayla asilabilir hale getirirdi.
-    if hakem.id == rapor.submitted_by_id:
+    if rapor.cikar_catismasi_var_mi(hakem):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Bir hakem kendi yukledigi raporu degerlendiremez "
-                "(cikar catismasi). Baska bir hakem secin."
+                "Bir hakem kendi takiminin (ya da kendi yukledigi) raporunu "
+                "degerlendiremez (cikar catismasi). Baska bir hakem secin."
             ),
         )
 

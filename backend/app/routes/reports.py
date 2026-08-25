@@ -53,6 +53,10 @@ def _attach_analysis_results(report: models.Report) -> models.Report:
     """
     # Atama bilgisini yaniti hazirlarken ekliyoruz: yonetici paneli her rapor
     # icin ayri bir istek atmak zorunda kalmasin (N+1).
+    # Takim adi da yanitla birlikte gidiyor: hakem/yonetici listede raporun
+    # HANGI TAKIMA ait oldugunu gorebilmeli (arama da takim adiyla yapiliyor).
+    setattr(report, "team_name", report.team.name if report.team else None)
+
     atama = report.assignment
     setattr(report, "assigned_referee_id", atama.referee_id if atama else None)
     setattr(
@@ -287,6 +291,7 @@ async def upload_report(
     project_name: str = Form(...),
     category_id: str = Form(None),
     competition_id: str = Form(None),
+    team_id: str = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.RoleChecker(["COMPETITION_MANAGER", "COMPETITOR"]))
@@ -323,6 +328,58 @@ async def upload_report(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="category_id ya da competition_id verilmeli.",
+        )
+
+    # --- Raporun SAHIBI takim -------------------------------------------
+    #
+    # Sartname AKIS 01, yarisma yoneticisinin "raporlari sisteme aktardigini"
+    # soyluyor. Bu durumda `submitted_by_id` yoneticidir ve raporun sahibi
+    # DEGILDIR. Onceden sonucu kimin gordugu yukleyene bakiyordu; sonuc olarak
+    # yoneticinin aktardigi bir raporun sonucunu HICBIR yarismaci goremiyordu.
+    # Sahiplik artik takimdan geliyor.
+    aktif_rol = getattr(current_user, "active_role", None)
+    takim = None
+    if team_id:
+        takim = db.query(models.Team).filter(models.Team.id == team_id).first()
+        if not takim:
+            raise HTTPException(status_code=404, detail="Takim bulunamadi.")
+        # Yarismaci baskasinin takimi adina rapor yukleyemez.
+        if aktif_rol == "COMPETITOR" and current_user.id not in takim.member_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Yalnizca uyesi oldugunuz bir takim adina rapor yukleyebilirsiniz.",
+            )
+    elif aktif_rol == "COMPETITOR":
+        # Yarismaci takim belirtmediyse: tek takimi varsa ona bagliyoruz,
+        # birden fazlaysa SECMESI gerekiyor - yanlis takima yazmak, raporu
+        # yanlis kisilere gostermek demek.
+        uyelikler = (
+            db.query(models.TeamMember)
+            .filter(models.TeamMember.user_id == current_user.id)
+            .all()
+        )
+        if len(uyelikler) == 1:
+            takim = db.query(models.Team).filter(
+                models.Team.id == uyelikler[0].team_id
+            ).first()
+        elif len(uyelikler) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Birden fazla takimda yer aliyorsunuz; raporu hangi takim "
+                    "adina yukledginizi secin (team_id)."
+                ),
+            )
+    elif aktif_rol in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
+        # Yonetici aktariminda takim ZORUNLU. Aksi halde rapor sahipsiz kalir
+        # ve sonucu hicbir yarismaci goremez - sartname AKIS 03 ("yarismaci
+        # sonucunu goruntuler") karsilanmaz.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Rapor hangi takima ait? Yonetici aktariminda team_id zorunlu - "
+                "aksi halde raporun sonucunu hicbir yarismaci goremez."
+            ),
         )
 
     category = db.query(models.Category).filter(models.Category.id == category_id).first()
@@ -388,6 +445,7 @@ async def upload_report(
         original_filename=file.filename,
         competition_id=competition.id if competition else None,
         submitted_by_id=current_user.id,
+        team_id=takim.id if takim else None,
         submission_date=datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     )
     
@@ -397,8 +455,10 @@ async def upload_report(
     
     # Run analysis in background
     background_tasks.add_task(run_background_analysis, report_id, file_path, db)
-    
-    return db_report
+
+    # _attach_analysis_results uzerinden donuyoruz: team_name ve atama alanlari
+    # yanitta dolu olsun. Duz `return db_report` bu alanlari bos birakiyordu.
+    return _attach_analysis_results(db_report)
 
 
 def _rol_yoksa_reddet(user: models.User) -> str:
@@ -435,13 +495,33 @@ def _rapora_erisebilir_mi(report: models.Report, user: models.User) -> bool:
     if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
         return True
     if aktif == "COMPETITOR":
-        return report.submitted_by_id == user.id
+        return _yarismacinin_raporu_mu(report, user)
     if aktif == "REFEREE":
         return report.assignment is not None and report.assignment.referee_id == user.id
     return False
 
 
-def _erisim_filtresi(query, user: models.User):
+def _yarismacinin_raporu_mu(report: models.Report, user: models.User) -> bool:
+    """Bu rapor bu yarismacinin (ya da takiminin) raporu mu.
+
+    TEKNOFEST'te basvuru birimi TAKIM, kisi degil. Takim arkadasi kendi
+    takiminin sonucunu gorebilmeli; baska bir takimin sonucunu ASLA.
+
+    Takimi olan raporda YALNIZCA takim uyeligine bakiyoruz - yukleyene
+    DEGIL. Bunun iki sebebi var:
+      * Sartname AKIS 01: raporu yarisma yoneticisi de aktarabiliyor. O
+        durumda `submitted_by_id` yoneticidir ve raporun sahibi degildir.
+      * Takimdan ayrilmis bir uye, bir zamanlar yuklemis olmasi sayesinde
+        erisimini surdurmemeli.
+    Takimi OLMAYAN raporda eski davranis geciyor (yalnizca yukleyen);
+    yarisma akisi devreye girmeden once yuklenmis kayitlar boyle.
+    """
+    if report.team_id:
+        return report.team is not None and user.id in report.team.member_ids
+    return report.submitted_by_id == user.id
+
+
+def _erisim_filtresi(query, user: models.User, db: Session):
     """_rapora_erisebilir_mi kurallarinin sorgu karsiligi.
 
     Ikisi ayni kurallari anlatmak ZORUNDA: liste bir raporu gosterip
@@ -452,7 +532,23 @@ def _erisim_filtresi(query, user: models.User):
     if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
         return query
     if aktif == "COMPETITOR":
-        return query.filter(models.Report.submitted_by_id == user.id)
+        takim_kimlikleri = [
+            m.team_id
+            for m in db.query(models.TeamMember)
+            .filter(models.TeamMember.user_id == user.id)
+            .all()
+        ]
+        # Kural _yarismacinin_raporu_mu ile BIREBIR ayni:
+        #   * takimi OLAN rapor -> yalnizca takim uyeligi (yukleyen olmak
+        #     yetmez; raporu yonetici de aktarmis olabilir, ayrica takimdan
+        #     ayrilmis bir uye eski yuklemesi sayesinde erisimini surdurmemeli)
+        #   * takimi OLMAYAN rapor -> eski davranis, yalnizca yukleyen
+        kosul = models.Report.team_id.is_(None) & (
+            models.Report.submitted_by_id == user.id
+        )
+        if takim_kimlikleri:
+            kosul = kosul | models.Report.team_id.in_(takim_kimlikleri)
+        return query.filter(kosul)
     if aktif == "REFEREE":
         # Ic birlesim (join): atamasi olmayan rapor hakemin listesine
         # DUSMEZ. Dagitimi yarisma yoneticisi yapar.
@@ -494,7 +590,7 @@ def list_reports(
     # Rol bazli filtreleme, istegin AKTIF ROLUNE gore yapiliyor.
     # Cok-rollu bir kullanici hakem rolundeyken yarismaci raporlarini
     # gormemeli; hangi rolle hareket ettigi belirleyici.
-    query = _erisim_filtresi(db.query(models.Report), current_user)
+    query = _erisim_filtresi(db.query(models.Report), current_user, db)
 
     if status:
         query = query.filter(models.Report.status == status)
@@ -753,6 +849,17 @@ def submit_decision(
     # olmadigi icin hic acamadigi bir raporu- onaylayip reddedebiliyordu.
     # Karar, sistemin geri alinamayan tek eylemi; en dar kapi burada olmali.
     report = _rapor_getir_yetkiliyse(report_id, current_user, db)
+
+    # CIKAR CATISMASI - ikinci kapi. Atama kontrolu bunu zaten engellemeli
+    # (atanamayan hakem karar da veremez), ama karar geri alinamayan tek
+    # eylem: atama tarafinda ileride acilacak bir bosluk buraya sizmasin.
+    if report.cikar_catismasi_var_mi(current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Kendi takiminizin raporunu degerlendiremezsiniz (cikar catismasi)."
+            ),
+        )
 
     # Ensure it's analyzed first
     if report.status == "pending":
