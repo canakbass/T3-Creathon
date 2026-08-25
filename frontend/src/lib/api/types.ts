@@ -54,6 +54,8 @@ export interface WireCompetition {
   status: string;
   submission_deadline: string | null;
   created_at: string;
+  /** Sablonun ait oldugu rapor asamasi (bkz. backend Competition.report_type_name). */
+  report_type_name: string | null;
   accepted_languages: string[];
   required_headings: string[];
   heading_synonyms: Record<string, string[]>;

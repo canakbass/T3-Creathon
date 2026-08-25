@@ -1,24 +1,41 @@
 import { z } from "zod";
 
-export const CATEGORY_OPTIONS = [
-  "Yapay Zeka ve Makine Öğrenmesi",
-  "Robotik ve Otomasyon",
-  "Sürdürülebilirlik ve Enerji",
-  "Finans Teknolojisi",
-  "Sağlık Teknolojisi",
-  "Oyun Tasarımı",
+/**
+ * Yarışmanın rapor türü (aşaması) için hazır öneriler.
+ *
+ * NEDEN LİSTE DEĞİL DE ÖNERİ: TEKNOFEST rapor terminolojisini yıldan yıla
+ * değiştiriyor — 2022'de "Kritik Tasarım Raporu (KTR)" olan aşama 2026
+ * teknik şartnamesinde "Final Tasarım Raporu (FTR)" adını almış. Sabit bir
+ * enum, bir sonraki sezon yanlış olurdu; bu yüzden serbest metin alanına
+ * yalnızca `datalist` önerisi olarak veriliyor.
+ */
+export const RAPOR_TURU_ONERILERI = [
+  "Ön Tasarım Raporu",
+  "Kritik Tasarım Raporu",
+  "Final Tasarım Raporu",
+  "Proje Detay Raporu",
 ] as const;
-
-export type CategoryOption = (typeof CATEGORY_OPTIONS)[number];
 
 export const criteriaTemplateSchema = z
   .object({
-    templateName: z
+    /**
+     * Bu şablonun hangi rapor aşamasına ait olduğu.
+     *
+     * NEDEN VAR: bir TEKNOFEST yarışmasının TEK şablonu yok. 2026 Havacılıkta
+     * YZ teknik şartnamesi madde 5: "Yarışmacı takımlardan iki ayrı doküman
+     * yazmaları beklenmektedir" — Ön Tasarım Raporu ve Final Tasarım Raporu,
+     * şablonları farklı tarihlerde yayımlanıyor ve puan ağırlıkları da
+     * farklı (bkz. sample_reports/.../Puan_Rubrigi.md: aynı yarışmanın ÖTR ve
+     * KTR ağırlıkları birbirini tutmuyor). Bu alan, tanımlanan şablonun hangi
+     * aşamaya ait olduğunu kayda geçiriyor.
+     *
+     * Önceki adı `templateName`'di ve girilen değer HİÇBİR YERE kaydedilmiyordu.
+     */
+    reportTypeName: z
       .string()
       .trim()
-      .min(3, "Şablon adı en az 3 karakter olmalı")
-      .max(80, "Şablon adı en fazla 80 karakter olabilir"),
-    category: z.enum(CATEGORY_OPTIONS, { error: "Bir kategori seçin" }),
+      .min(3, "Rapor türü en az 3 karakter olmalı")
+      .max(80, "Rapor türü en fazla 80 karakter olabilir"),
     metrics: z
       .array(
         z.object({
@@ -55,8 +72,7 @@ export type CriteriaTemplateFormInput = z.input<typeof criteriaTemplateSchema>;
 export type CriteriaTemplateFormValues = z.output<typeof criteriaTemplateSchema>;
 
 export const DEFAULT_CRITERIA_TEMPLATE_VALUES = {
-  templateName: "",
-  category: undefined,
+  reportTypeName: "",
   metrics: [{ name: "", weight: 100 }],
   requiredHeadings: [{ value: "" }],
 } as unknown as CriteriaTemplateFormInput;

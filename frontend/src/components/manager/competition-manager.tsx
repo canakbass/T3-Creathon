@@ -138,6 +138,7 @@ export function CompetitionManager() {
       await setCompetitionTemplate(
         secili.id,
         {
+          reportTypeName: values.reportTypeName,
           acceptedLanguages: ["tr"],
           requiredHeadings: values.requiredHeadings.map((h) => h.value),
           minPages: null,

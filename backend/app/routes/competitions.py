@@ -61,6 +61,7 @@ def _yanit(y: models.Competition) -> dict:
         "status": y.status,
         "submission_deadline": y.submission_deadline,
         "created_at": y.created_at,
+        "report_type_name": y.report_type_name,
         "accepted_languages": _json_yukle(y.accepted_languages, ["tr"]),
         "required_headings": _json_yukle(y.required_headings, []),
         "heading_synonyms": _json_yukle(y.heading_synonyms, {}),
@@ -238,6 +239,7 @@ def set_template(
     # analizden sonra degistirmek raporlari farkli olcutlerle puanlar.
     yeniden = _kural_degisimini_dogrula(db, y, govde.confirm_reanalysis)
 
+    y.report_type_name = govde.report_type_name
     y.accepted_languages = json.dumps(govde.accepted_languages, ensure_ascii=False)
     y.required_headings = json.dumps(govde.required_headings, ensure_ascii=False)
     y.heading_synonyms = json.dumps(govde.heading_synonyms or {}, ensure_ascii=False)

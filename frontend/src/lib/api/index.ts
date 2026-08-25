@@ -354,6 +354,8 @@ export async function createCompetition(input: {
 }
 
 export interface TemplateInput {
+  /** Bu sablonun ait oldugu rapor asamasi ("Kritik Tasarim Raporu" gibi). */
+  reportTypeName?: string | null;
   acceptedLanguages: string[];
   requiredHeadings: string[];
   headingSynonyms?: Record<string, string[]>;
@@ -377,6 +379,7 @@ export async function setCompetitionTemplate(
   return apiFetch<WireCompetition>(`/api/competitions/${encodeURIComponent(id)}/template`, {
     method: "PUT",
     json: {
+      report_type_name: t.reportTypeName ?? null,
       accepted_languages: t.acceptedLanguages,
       required_headings: t.requiredHeadings,
       heading_synonyms: t.headingSynonyms ?? {},

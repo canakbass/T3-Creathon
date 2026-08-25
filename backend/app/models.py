@@ -117,6 +117,21 @@ class Competition(Base):
     # --- Sablon kurallari (Kriter ve Sablon Tanimi ekrani bunlari doldurur) ---
     # JSON metni olarak saklaniyor: SQLite'ta yerel JSON tipi yok ve Postgres'e
     # gectigimizde de ayni kod calissin istiyoruz.
+    # Bu sablonun ait oldugu RAPOR ASAMASI ("On Tasarim Raporu", "Kritik
+    # Tasarim Raporu"...).
+    #
+    # NEDEN VAR: bir TEKNOFEST yarismasinin TEK sablonu yok. 2026 Havacilikta
+    # YZ teknik sartnamesi madde 5: "Yarismaci takimlardan IKI AYRI DOKUMAN
+    # yazmalari beklenmektedir" - On Tasarim Raporu ve Final Tasarim Raporu,
+    # sablonlari farkli tarihlerde yayimlaniyor. Ustelik ayni yarismanin
+    # asamalari FARKLI puan agirliklari kullaniyor (bkz. sample_reports/
+    # havacilikta_yz_ktr/Puan_Rubrigi.md: 2022 KTR agirliklari 2026 OTR
+    # agirliklariyla ortusmüyor).
+    #
+    # Arayuzde bu deger "Sablon adi" diye soruluyordu ve HICBIR YERE
+    # kaydedilmiyordu; artik hangi asamanin kurallarina bakildigi kayitli.
+    report_type_name = Column(String, nullable=True)
+
     accepted_languages = Column(Text, nullable=True)   # ["tr"]
     required_headings = Column(Text, nullable=True)    # ["Takım Şeması", ...]
     heading_synonyms = Column(Text, nullable=True)     # {"Kaynakça": ["Referanslar"]}

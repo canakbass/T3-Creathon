@@ -4,8 +4,8 @@ import { useId, useState } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
-  CATEGORY_OPTIONS,
   criteriaTemplateSchema,
+  RAPOR_TURU_ONERILERI,
   DEFAULT_CRITERIA_TEMPLATE_VALUES,
   type CriteriaTemplateFormInput,
   type CriteriaTemplateFormValues,
@@ -62,7 +62,7 @@ export function CriteriaTemplateForm({ onSaved, submitError }: CriteriaTemplateF
     } catch {
       return;
     }
-    setSavedTemplateName(values.templateName);
+    setSavedTemplateName(values.reportTypeName);
     reset(DEFAULT_CRITERIA_TEMPLATE_VALUES);
   }
 
@@ -77,7 +77,7 @@ export function CriteriaTemplateForm({ onSaved, submitError }: CriteriaTemplateF
         </h2>
         <p className="mt-1 text-sm text-muted">
           Bu yarışma için hakemlerin ve AI değerlendiricisinin kullanacağı değerlendirme
-          metriklerini, kategoriyi ve zorunlu rapor başlıklarını tanımlayın.
+          metriklerini ve zorunlu rapor başlıklarını tanımlayın.
         </p>
       </div>
 
@@ -97,7 +97,7 @@ export function CriteriaTemplateForm({ onSaved, submitError }: CriteriaTemplateF
           data-testid="template-saved-banner"
           className="mb-6 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700"
         >
-          <span>&ldquo;{savedTemplateName}&rdquo; şablonu başarıyla kaydedildi.</span>
+          <span>&ldquo;{savedTemplateName}&rdquo; şablonu bu yarışmaya kaydedildi.</span>
           <button
             type="button"
             onClick={() => setSavedTemplateName(null)}
@@ -116,49 +116,35 @@ export function CriteriaTemplateForm({ onSaved, submitError }: CriteriaTemplateF
         className="flex flex-col gap-6"
       >
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="templateName" className="text-sm font-semibold text-foreground">
-            Şablon adı
+          <label htmlFor="reportTypeName" className="text-sm font-semibold text-foreground">
+            Rapor türü
           </label>
           <input
-            id="templateName"
+            id="reportTypeName"
             type="text"
-            placeholder="örn. Robotik ve Otomasyon — Final Turu"
-            aria-invalid={errors.templateName ? "true" : "false"}
-            aria-describedby={errors.templateName ? "templateName-error" : undefined}
-            {...register("templateName")}
+            list="rapor-turu-onerileri"
+            placeholder="örn. Kritik Tasarım Raporu"
+            aria-invalid={errors.reportTypeName ? "true" : "false"}
+            aria-describedby={
+              errors.reportTypeName ? "reportTypeName-error" : "reportTypeName-hint"
+            }
+            {...register("reportTypeName")}
             className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
           />
-          {errors.templateName && (
-            <p id="templateName-error" role="alert" className="text-xs font-medium text-red-600">
-              {errors.templateName.message}
-            </p>
-          )}
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="category" className="text-sm font-semibold text-foreground">
-            Kategori
-          </label>
-          <select
-            id="category"
-            defaultValue=""
-            aria-invalid={errors.category ? "true" : "false"}
-            aria-describedby={errors.category ? "category-error" : undefined}
-            {...register("category")}
-            className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
-          >
-            <option value="" disabled>
-              Bir kategori seçin
-            </option>
-            {CATEGORY_OPTIONS.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
+          <datalist id="rapor-turu-onerileri">
+            {RAPOR_TURU_ONERILERI.map((t) => (
+              <option key={t} value={t} />
             ))}
-          </select>
-          {errors.category && (
-            <p id="category-error" role="alert" className="text-xs font-medium text-red-600">
-              {errors.category.message}
+          </datalist>
+          {errors.reportTypeName ? (
+            <p id="reportTypeName-error" role="alert" className="text-xs font-medium text-red-600">
+              {errors.reportTypeName.message}
+            </p>
+          ) : (
+            <p id="reportTypeName-hint" className="text-xs text-muted">
+              Bir yarışmanın birden fazla rapor aşaması olur (Ön Tasarım, Final
+              Tasarım…) ve her aşamanın başlıkları ile puan ağırlıkları farklıdır.
+              Bu şablonun hangi aşamaya ait olduğunu yazın.
             </p>
           )}
         </div>

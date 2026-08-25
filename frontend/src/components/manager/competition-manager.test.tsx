@@ -169,11 +169,7 @@ describe("CompetitionManager", () => {
       screen.getByRole("region", { name: /kriter ve şablon tanımı/i }),
     );
 
-    await user.type(form.getByLabelText(/şablon adı/i), "KTR Şablonu");
-    await user.selectOptions(
-      form.getByLabelText(/kategori/i),
-      "Yapay Zeka ve Makine Öğrenmesi",
-    );
+    await user.type(form.getByLabelText(/rapor türü/i), "Kritik Tasarım Raporu");
     await user.type(form.getByLabelText(/metrik 1 adı/i), "Özgünlük");
     await user.clear(form.getByLabelText(/metrik 1 ağırlık/i));
     await user.type(form.getByLabelText(/metrik 1 ağırlık/i), "100");

@@ -9,11 +9,14 @@ async function fillWeight(user: ReturnType<typeof userEvent.setup>, index: numbe
 }
 
 describe("CriteriaTemplateForm", () => {
-  it("renders the template name, category, and at least one metric and heading row", () => {
+  it("renders the report type, and at least one metric and heading row", () => {
     render(<CriteriaTemplateForm />);
 
-    expect(screen.getByLabelText(/şablon adı/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^kategori$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/rapor türü/i)).toBeInTheDocument();
+    // Kategori alani KALDIRILDI: yarismanin kategorisi yarisma olusturulurken
+    // BIR KEZ seciliyor; sablon formundaki ikinci secim hicbir yere
+    // kaydedilmiyordu (olu alan).
+    expect(screen.queryByLabelText(/^kategori$/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/metrik 1 adı/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^zorunlu başlık 1$/i)).toBeInTheDocument();
   });
@@ -25,9 +28,8 @@ describe("CriteriaTemplateForm", () => {
     await user.click(screen.getByRole("button", { name: /şablonu kaydet/i }));
 
     expect(
-      await screen.findByText(/şablon adı en az 3 karakter olmalı/i),
+      await screen.findByText(/rapor türü en az 3 karakter olmalı/i),
     ).toBeInTheDocument();
-    expect(document.getElementById("category-error")).toHaveTextContent(/bir kategori seçin/i);
     expect(screen.getByText(/metrik adı en az 2 karakter olmalı/i)).toBeInTheDocument();
     expect(screen.getByText(/başlık en az 2 karakter olmalı/i)).toBeInTheDocument();
   });
@@ -36,11 +38,11 @@ describe("CriteriaTemplateForm", () => {
     const user = userEvent.setup();
     render(<CriteriaTemplateForm />);
 
-    await user.type(screen.getByLabelText(/şablon adı/i), "AI");
+    await user.type(screen.getByLabelText(/rapor türü/i), "AI");
     await user.click(screen.getByRole("button", { name: /şablonu kaydet/i }));
 
     expect(
-      await screen.findByText(/şablon adı en az 3 karakter olmalı/i),
+      await screen.findByText(/rapor türü en az 3 karakter olmalı/i),
     ).toBeInTheDocument();
   });
 
@@ -48,8 +50,7 @@ describe("CriteriaTemplateForm", () => {
     const user = userEvent.setup();
     render(<CriteriaTemplateForm />);
 
-    await user.type(screen.getByLabelText(/şablon adı/i), "Robotik Final Turu");
-    await user.selectOptions(screen.getByLabelText(/^kategori$/i), "Robotik ve Otomasyon");
+    await user.type(screen.getByLabelText(/rapor türü/i), "Kritik Tasarım Raporu");
     await user.type(screen.getByLabelText(/metrik 1 adı/i), "Teknik uygulanabilirlik");
     await fillWeight(user, 0, "40");
     await user.type(screen.getByLabelText(/^zorunlu başlık 1$/i), "Özet");
@@ -81,8 +82,7 @@ describe("CriteriaTemplateForm", () => {
     const onSaved = jest.fn();
     render(<CriteriaTemplateForm onSaved={onSaved} />);
 
-    await user.type(screen.getByLabelText(/şablon adı/i), "Robotik Final Turu");
-    await user.selectOptions(screen.getByLabelText(/^kategori$/i), "Robotik ve Otomasyon");
+    await user.type(screen.getByLabelText(/rapor türü/i), "Kritik Tasarım Raporu");
     await user.type(screen.getByLabelText(/metrik 1 adı/i), "Teknik uygulanabilirlik");
     await fillWeight(user, 0, "100");
     await user.type(screen.getByLabelText(/^zorunlu başlık 1$/i), "Özet");
@@ -90,19 +90,18 @@ describe("CriteriaTemplateForm", () => {
     await user.click(screen.getByRole("button", { name: /şablonu kaydet/i }));
 
     const banner = await screen.findByTestId("template-saved-banner");
-    expect(within(banner).getByText(/robotik final turu/i)).toBeInTheDocument();
+    expect(within(banner).getByText(/kritik tasarım raporu/i)).toBeInTheDocument();
 
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(onSaved).toHaveBeenCalledWith(
       expect.objectContaining({
-        templateName: "Robotik Final Turu",
-        category: "Robotik ve Otomasyon",
+        reportTypeName: "Kritik Tasarım Raporu",
         metrics: [{ name: "Teknik uygulanabilirlik", weight: 100 }],
         requiredHeadings: [{ value: "Özet" }],
       }),
     );
 
-    expect(screen.getByLabelText(/şablon adı/i)).toHaveValue("");
+    expect(screen.getByLabelText(/rapor türü/i)).toHaveValue("");
     expect(screen.getByLabelText(/metrik 1 adı/i)).toHaveValue("");
   });
 
@@ -110,8 +109,7 @@ describe("CriteriaTemplateForm", () => {
     const user = userEvent.setup();
     render(<CriteriaTemplateForm />);
 
-    await user.type(screen.getByLabelText(/şablon adı/i), "Robotik Final Turu");
-    await user.selectOptions(screen.getByLabelText(/^kategori$/i), "Robotik ve Otomasyon");
+    await user.type(screen.getByLabelText(/rapor türü/i), "Kritik Tasarım Raporu");
     await user.type(screen.getByLabelText(/metrik 1 adı/i), "Teknik uygulanabilirlik");
     await fillWeight(user, 0, "100");
     await user.type(screen.getByLabelText(/^zorunlu başlık 1$/i), "Özet");

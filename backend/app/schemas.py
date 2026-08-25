@@ -50,6 +50,8 @@ class CompetitionCreate(BaseModel):
 
 class CompetitionTemplate(BaseModel):
     """Yarismanin sablon kurallari - AI dil/sablon/baslik kontrolu bunlari kullanir."""
+    # Bu sablonun ait oldugu rapor asamasi (bkz. models.Competition.report_type_name).
+    report_type_name: Optional[str] = Field(default=None, max_length=80)
     accepted_languages: List[str] = ["tr"]
     required_headings: List[str]
     heading_synonyms: Optional[Dict[str, List[str]]] = None
@@ -92,6 +94,7 @@ class CompetitionResponse(BaseModel):
     status: str
     submission_deadline: Optional[datetime] = None
     created_at: datetime
+    report_type_name: Optional[str] = None
     accepted_languages: List[str] = []
     required_headings: List[str] = []
     heading_synonyms: Dict[str, List[str]] = {}
