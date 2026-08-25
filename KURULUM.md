@@ -193,17 +193,41 @@ açmasın diye.
 
 ## 7. Testler
 
+### Birim ve bileşen testleri
+
 Repo kökünden, aktivasyon gerekmez:
 
 ```bash
-.venv/bin/python ai-doc-analysis/tests/test_analyzer.py    # 32 test
-.venv/bin/python ai-scoring/tests/test_scorer.py           # 84-91 test *
-cd backend && ../.venv/bin/python -m pytest tests/ -v; cd ..   #  9 test
-cd frontend && npm test; cd ..                             # 87 test
+.venv/bin/python ai-doc-analysis/tests/test_analyzer.py         #  32 test
+.venv/bin/python ai-scoring/tests/test_scorer.py                #  95-102 test *
+cd backend && ../.venv/bin/python -m pytest tests/ -q; cd ..    #  52 test
+cd frontend && npm test; cd ..                                  # 105 test
 ```
 
-\* `google-genai` kuruluysa 91, değilse 84 — Gemini'ye özel testler
+\* `google-genai` kuruluysa 102, değilse 95 — Gemini'ye özel testler
 opsiyonel SDK yokken atlanıyor.
+
+**Dikkat:** `ai-doc-analysis` ve `ai-scoring` testleri pytest ile DEĞİL,
+doğrudan çalıştırılıyor. Bunlar kendi `check()` fonksiyonlarını kullanan
+betikler ve sonda `sys.exit()` çağırıyorlar; `pytest` ile toplanmaya
+çalışılırsa `INTERNALERROR: SystemExit` verirler.
+
+### Uçtan uca test (çalışan sunucuya karşı)
+
+Birim testleri modülleri tek tek doğruluyor. Bu betik ise gerçek HTTP
+üzerinden, dört rolün tamamıyla, bir yarışmanın baştan sona akışını
+koşturuyor — demo öncesi "sistem gerçekten çalışıyor mu" sorusunun cevabı:
+
+```bash
+scripts/dev-backend.sh start
+.venv/bin/python scripts/e2e-test.py      # 37 kontrol
+scripts/dev-backend.sh stop
+```
+
+Kapsadıkları: rol seçimi zorunluluğu, yarışma kurulumu ve aşama geçişleri,
+yarışmacı başvurusu, AI analizinin yarışmanın kriterleriyle puanlaması,
+hakem ataması, yetki sınırları (atanmamış hakem raporu göremez/karar
+veremez), karar doğrulama, veri bütünlüğü kuralları ve intihal tespiti.
 
 ---
 

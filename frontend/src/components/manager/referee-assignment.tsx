@@ -148,11 +148,24 @@ export function RefereeAssignmentPanel({
     setInfo(null);
     try {
       const sonuc = await autoAssign(competitionId);
+      // Dağıtım ZATEN ATANMIŞ raporlara dokunmuyor (bilinçli: bir hakemin
+      // okumaya başladığı raporu altından çekmek daha kötü). Sonuç olarak,
+      // dağıtımdan SONRA eklenen bir hakem sıfırda kalabiliyor. "Atanmamış
+      // rapor kalmadı" doğru ama eksik bir cevap; dengesizliği söylüyoruz
+      // ki yönetici tek tek değiştirerek düzeltebilsin.
+      const yukler = sonuc.load.map((l) => l.assigned_count);
+      const dengesiz =
+        yukler.length > 1 && Math.max(...yukler) - Math.min(...yukler) > 1;
+      const dokum = sonuc.load.map((l) => `${l.email}: ${l.assigned_count}`).join(" · ");
       const dagitim =
-        sonuc.assigned === 0
+        (sonuc.assigned === 0
           ? "Atanmamış rapor kalmadı."
-          : `${sonuc.assigned} rapor dağıtıldı. ` +
-            sonuc.load.map((l) => `${l.email}: ${l.assigned_count}`).join(" · ");
+          : `${sonuc.assigned} rapor dağıtıldı. `) +
+        (dokum ? ` ${dokum}` : "") +
+        (dengesiz
+          ? " — Yük dengesiz. Otomatik dağıtım zaten atanmış raporlara" +
+            " dokunmuyor; dengelemek için sorumlu hakemi tek tek değiştirin."
+          : "");
       // Dağıtılamayan raporlar SESSİZCE atlanmamalı: aksi halde yönetici
       // "dağıtım tamam" sanıp hiç değerlendirilmeyen bir rapor bırakır.
       // (Backend bunları `skipped` ile bildiriyor; en sık sebep raporun

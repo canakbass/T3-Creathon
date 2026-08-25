@@ -12,9 +12,9 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 | Klasör | Kişi | İçerik | Durum |
 |---|---|---|---|
 | `ai-doc-analysis/` | Hasan | Dil/şablon/başlık kontrolü | ✅ Çalışıyor, gerçek veriyle test edildi (32 test) |
-| `ai-scoring/` | Hayrettin | Kategori, benzerlik, kriter puanlama | ✅ Çalışıyor, backend'e entegre edildi (88 test) — mock'lar kaldırıldı |
-| `backend/` | Mustafa | FastAPI — API, veri modeli, auth, yarışma/atama | ✅ Çalışıyor (22 test); SQLite veya Supabase Postgres |
-| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Backend'e bağlı (99 test); tüm mock veri kaldırıldı |
+| `ai-scoring/` | Hayrettin | Kategori, benzerlik, kriter puanlama | ✅ Çalışıyor, backend'e entegre edildi (102 test) — mock'lar kaldırıldı |
+| `backend/` | Mustafa | FastAPI — API, veri modeli, auth, yarışma/atama | ✅ Çalışıyor (52 test); SQLite veya Supabase Postgres |
+| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Backend'e bağlı (105 test); tüm mock veri kaldırıldı |
 | `docs/` | — | Ortak dokümanlar, API sözleşmesi, MVP kuralları | Güncel |
 
 ## MVP'nin 6 zorunlu maddesi — hepsi tamam
@@ -204,6 +204,43 @@ tutarsızlık bitti, tüm AI çıktıları da Türkçe.
   yalnızca Yarışma Yöneticisi panelinde. Backend her iki role de izin
   veriyor (`RoleChecker(["COMPETITION_MANAGER", "COMPETITOR"])`).
 
+## Güvenlik ve bütünlük denetimi (2026-08-25)
+
+Sistemin tamamı düşmanca bir gözle tarandı; **26 aday bulgunun tamamı canlı
+sunucuya karşı tek tek doğrulandı** (varsayımla değil, gerçek HTTP
+istekleriyle). Doğrulananlar düzeltildi ve her biri için düzeltme
+kapatılınca **düşen** bir regresyon testi yazıldı.
+
+En ağır beşi ve ölçülen davranışları:
+
+| # | Ne oluyordu | Ölçülen |
+|---|---|---|
+| 1 | Sistemdeki **herhangi bir hakem**, kendisine atanmamış bir raporu onaylayabiliyordu | `POST /decision` → 200 |
+| 2 | Atanmamış hakem, başka bir yarışmacının **tam AI analizini** okuyabiliyordu (dosyayı açamadığı hâlde) | `GET /reports/{id}` → 200 |
+| 3 | Rol **seçmemiş** çok rollü token, tüm yarışmacıların raporlarını listeliyordu | filtre sessizce devre dışı |
+| 4 | Yarışma kriterleri puanı **hiç etkilemiyordu**; puan sabit TEKNOFEST rubriğinden geliyordu | yönetici "Emniyet %90" dedi, puan Takım Şeması %5 + Algoritmalar %25 … üzerinden çıktı |
+| 5 | Aynı hesap kendi raporunu yükleyip **kendine atanıp kendine 100** verebiliyordu | üç adım da 200 |
+
+Bunların hepsi tek bir kök nedenden geliyordu: kod *"bu kullanıcı hakem
+mi?"* diye soruyor, *"bu rapor **bu** hakemin mi?"* diye sormuyordu. Rapora
+dokunan her uç nokta artık tek bir yetki kapısından (`_rapora_erisebilir_mi`
++ `_erisim_filtresi`) geçiyor ve eksik rol *"filtre yok"* değil *"erişim
+yok"* anlamına geliyor.
+
+Ayrıca kapatılanlar: intihal kontrolü çalışmadığında "bu sistemdeki ilk
+başvuru" demesi, analizi çökmüş raporun sonsuza kadar "Analiz devam ediyor"
+göstermesi ve hiç karara bağlanamaması, kuralların analiz sonrası sessizce
+değiştirilip aynı yarışmadaki iki yarışmacının farklı ölçütlerle
+puanlanması, sonuçlar açıklandıktan sonra başvuruların yeniden açılabilmesi,
+kararı verilmiş raporun atamasının silinebilmesi, negatif kriter ağırlıkları
+ve kimlik doğrulaması istemeyen kriter/kategori uç noktaları.
+
+**Jüri bunu sorarsa:** sistemin ana vaadi "AI karar vermez, hakem verir".
+Bu vaadin karşılığı, kararın **doğru hakemde** olduğunun garanti
+edilmesidir — denetimin çoğu tam olarak bunu sağlamakla ilgiliydi.
+
+---
+
 ## Yayına alma ve Supabase
 
 Sistem hiçbir şey ayarlanmadan çalışır (SQLite + yerel disk). Yayına almak
@@ -217,22 +254,31 @@ frontend Vercel'e.
 
 ## Kurulum ve test (herkes için)
 
+Ayrıntılı kurulum için **[KURULUM.md](KURULUM.md)**. Kısa hâli:
+
 ```bash
 # ai-doc-analysis (Hasan)          -> 32 test
-pip install -r ai-doc-analysis/requirements.txt
-python ai-doc-analysis/tests/test_analyzer.py
+.venv/bin/python ai-doc-analysis/tests/test_analyzer.py
 
-# ai-scoring (Hayrettin)           -> 76 test
-pip install -r ai-scoring/requirements.txt
-python ai-scoring/tests/test_scorer.py
+# ai-scoring (Hayrettin)           -> 102 test
+.venv/bin/python ai-scoring/tests/test_scorer.py
 
-# backend (Mustafa)                -> 9 test
-pip install -r backend/requirements.txt
-cd backend && python -m pytest tests/ -v
+# backend (Mustafa)                -> 52 test
+cd backend && ../.venv/bin/python -m pytest tests/ -q; cd ..
 
-# frontend (Mahmut)                -> 99 test
-cd frontend && npm install && npm test
+# frontend (Mahmut)                -> 105 test
+cd frontend && npm install && npm test; cd ..
+
+# uctan uca, CALISAN sunucuya karsi -> 37 kontrol
+scripts/dev-backend.sh start
+.venv/bin/python scripts/e2e-test.py
+scripts/dev-backend.sh stop
 ```
+
+`ai-doc-analysis` ve `ai-scoring` testleri pytest ile **değil** doğrudan
+çalıştırılıyor — kendi `check()` fonksiyonlarını kullanan betikler ve sonda
+`sys.exit()` çağırıyorlar; pytest ile toplanmaya çalışılırsa
+`INTERNALERROR: SystemExit` verirler.
 
 **Sistemi çalıştırmak (iki terminal gerekiyor):**
 
@@ -265,14 +311,15 @@ python -m uvicorn main:app --reload
 Seed kullanıcıları (ilk açılışta oluşur): `manager@`, `referee@`,
 `competitor@`, `evaluator@teknofest.org` — hepsinin şifresi `password123`.
 
-### Son test durumu (2026-08-24)
+### Son test durumu (2026-08-25)
 
 | Paket | Sonuç |
 |---|---|
 | `ai-doc-analysis` | 32 başarılı, 0 başarısız |
-| `ai-scoring` | 88 başarılı, 0 başarısız |
-| `backend` (pytest) | 22 başarılı, 0 başarısız |
-| `frontend` (jest) | 99 başarılı, 0 başarısız |
+| `ai-scoring` | 102 başarılı, 0 başarısız |
+| `backend` (pytest) | 52 başarılı, 0 başarısız |
+| `frontend` (jest) | 105 başarılı, 0 başarısız |
+| `scripts/e2e-test.py` (canlı sunucu) | 37 başarılı, 0 başarısız |
 | `frontend` (next build) | başarılı |
 | Uçtan uca — API akışı | 40 başarılı, 0 başarısız |
 | Uçtan uca — arayüz istek şekilleri (canlı backend) | 32 başarılı, 0 başarısız |
