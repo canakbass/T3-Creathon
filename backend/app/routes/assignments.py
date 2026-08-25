@@ -198,10 +198,28 @@ def auto_assign(
         )
 
     yeni = []
+    atlanan = []
     for rapor in atanmamis:
+        # CIKAR CATISMASI: raporu yukleyen kisi kendi raporunun hakemi
+        # olamaz. Ayni hesabin hem COMPETITOR hem REFEREE rolu olabildigi
+        # icin bu gercek bir durum (deneme hesaplarinda oldugu gibi) -
+        # onceden bir kullanici kendi raporunu yukleyip kendine atanip
+        # kendine 100 verebiliyordu.
+        uygun = [h for h in hakemler if h.id != rapor.submitted_by_id]
+        if not uygun:
+            atlanan.append(
+                {
+                    "report_id": rapor.id,
+                    "reason": (
+                        "Yarismadaki tek uygun hakem raporun sahibi; cikar "
+                        "catismasi nedeniyle atanmadi. Baska bir hakem ekleyin."
+                    ),
+                }
+            )
+            continue
         # En az yuklu hakem; esitlikte e-postaya gore deterministik secim
         # (ayni girdi her zaman ayni dagitimi versin diye)
-        hedef = min(hakemler, key=lambda h: (yuk[h.id], h.email))
+        hedef = min(uygun, key=lambda h: (yuk[h.id], h.email))
         db.add(
             models.Assignment(
                 id=str(uuid.uuid4()),
@@ -218,6 +236,7 @@ def auto_assign(
     return {
         "assigned": len(yeni),
         "assignments": yeni,
+        "skipped": atlanan,
         "load": [
             {"referee_id": h.id, "email": h.email, "assigned_count": yuk[h.id]}
             for h in sorted(hakemler, key=lambda x: x.email)
@@ -246,6 +265,18 @@ def reassign(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Gecerli bir hakem secin.",
+        )
+
+    # CIKAR CATISMASI: kimse kendi raporunun hakemi olamaz. Elle atamada da
+    # gecerli - otomatik dagitimda engelleyip burada birakmak, kurali tek
+    # bir tiklamayla asilabilir hale getirirdi.
+    if hakem.id == rapor.submitted_by_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Bir hakem kendi yukledigi raporu degerlendiremez "
+                "(cikar catismasi). Baska bir hakem secin."
+            ),
         )
 
     # Karar verilmis raporun hakemi degistirilemez: karar zaten kayitli ve

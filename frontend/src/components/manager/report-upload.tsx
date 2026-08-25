@@ -128,7 +128,25 @@ export function ReportUpload({
         // Yukleme bitti ama analiz daha yeni basladi.
         patchItem(id, { status: "analyzing", progress: 60, reportId: report.reportId });
 
-        await pollUntilAnalyzed(report.reportId);
+        const sonuc = await pollUntilAnalyzed(report.reportId);
+
+        // `pollUntilAnalyzed` "pending" DIŞINDAKİ ilk durumda dönüyor ve
+        // "error" da bir bitiş durumu (analiz çöktü). Burası eskiden dönen
+        // değere hiç bakmadan yeşil "Analiz tamamlandı" gösteriyordu; yani
+        // analizi çökmüş bir rapor başarılı görünüyor, kimse yeniden
+        // yüklemeyi düşünmüyor ve hakem hiç analizi olmayan bir raporla
+        // karşılaşıyordu.
+        if (sonuc.rawStatus === "error") {
+          patchItem(id, {
+            status: "error",
+            progress: 0,
+            errorMessage:
+              "Dosya yüklendi ancak AI analizi tamamlanamadı. Belge taranmış " +
+              "(görüntü) bir PDF olabilir veya metni okunamıyor olabilir. " +
+              "Metin tabanlı bir PDF ile tekrar deneyin.",
+          });
+          return;
+        }
 
         patchItem(id, { status: "success", progress: 100 });
         onUploadComplete?.(file.name);

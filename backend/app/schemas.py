@@ -125,10 +125,19 @@ class RefereeLoad(BaseModel):
     email: EmailStr
     assigned_count: int
 
+class SkippedAssignment(BaseModel):
+    report_id: str
+    reason: str
+
+
 class AutoAssignResult(BaseModel):
     assigned: int
     assignments: List[AutoAssignItem]
     load: List[RefereeLoad]
+    # Dagitilamayan raporlar. SESSIZ ATLAMA YOK: bir rapor atanamadiysa
+    # yonetici bunu gormeli, aksi halde "dagitim tamam" sanip hic
+    # degerlendirilmeyen bir rapor birakir.
+    skipped: List[SkippedAssignment] = []
 
 
 class LoginResponse(BaseModel):

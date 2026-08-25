@@ -80,13 +80,27 @@ export function RefereeReportContainer({ reportId }: { reportId: string }) {
           rationaleAiDrafted: submission.rationaleAiDrafted,
           rationaleEditedByReferee: submission.rationaleEditedByReferee,
         });
-        // Karar sonrasi rapor durumu degisiyor (approved/rejected/revise) -
-        // rozetin guncellenmesi icin tazeliyoruz.
-        setData(await getReport(reportId));
       } catch (cause) {
         const message = describeError(cause);
         setDecisionError(message);
         throw cause;
+      }
+
+      // BURADAN SONRASI KARAR KAYDEDILDIKTEN SONRA.
+      //
+      // Tazeleme, karar gonderimiyle AYNI try blogundaydi. Ag baglantisi
+      // bir an koparsa karar backend'e YAZILMIS olmasina ragmen hakem
+      // "karar kaydedilemedi" hatasi goruyor, form da kaydedildi ekranini
+      // gostermiyordu. Hakem tekrar deniyor ve bu kez "bu rapor icin zaten
+      // karar verilmis" hatasi aliyor - sistem bozuk gibi gorunuyor.
+      // Basarisiz olan sey yalnizca EKRANI tazelemek; karar duruyor.
+      try {
+        setData(await getReport(reportId));
+      } catch (cause) {
+        setDecisionError(
+          `Karar kaydedildi, ancak ekran güncellenemedi (${describeError(cause)}). ` +
+            "Güncel durumu görmek için sayfayı yenileyin.",
+        );
       }
     },
     [reportId],

@@ -39,13 +39,15 @@ function jsonResponse(status: number, payload: unknown) {
 }
 
 /** upload -> get(report) zincirini karsilayan fetch taklidi. */
-function mockUploadFetch(options: { analyzed?: boolean; uploadStatus?: number } = {}) {
-  const { analyzed = true, uploadStatus = 201 } = options;
+function mockUploadFetch(
+  options: { analyzed?: boolean; uploadStatus?: number; reportStatus?: string } = {},
+) {
+  const { analyzed = true, uploadStatus = 201, reportStatus } = options;
   const reportBody = {
     id: "RPT-2026-ABC123",
     project_name: "İHA Nesne Tespiti",
     category_id: "cat-2",
-    status: analyzed ? "analyzed" : "pending",
+    status: reportStatus ?? (analyzed ? "analyzed" : "pending"),
     file_path: "uploads/RPT-2026-ABC123.pdf",
     submitted_by_id: "user-1",
     submission_date: "2026-08-24T10:00:00",
@@ -242,5 +244,43 @@ describe("ReportUpload", () => {
       expect(select).toHaveTextContent("Yapay Zeka ve Makine Öğrenmesi");
     });
     expect(select).toHaveValue("cat-2");
+  });
+});
+
+describe("ReportUpload — analiz çöktüğünde", () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  /**
+   * REGRESYON: analizi ÇÖKMÜŞ bir rapor yeşil "Analiz tamamlandı" gösteriyordu.
+   *
+   * `pollUntilAnalyzed` "pending" DIŞINDAKİ ilk durumda dönüyor ve "error"
+   * da bir bitiş durumu. Çağıran taraf dönen değere hiç bakmıyor, koşulsuz
+   * `status: "success"` yazıyordu. Sonuç: yükleyen kişi her şeyin yolunda
+   * olduğunu sanıyor, kimse yeniden yüklemeyi düşünmüyor ve hakem hiç
+   * analizi olmayan bir raporla karşılaşıyor.
+   */
+  it("analiz status=error dönerse başarı değil hata gösterir", async () => {
+    mockUploadFetch({ reportStatus: "error" });
+    const onUploadComplete = jest.fn();
+    const user = userEvent.setup();
+
+    render(
+      <ReportUpload initialCategories={CATEGORIES} onUploadComplete={onUploadComplete} />,
+    );
+    await fillProjectName(user, "İHA Nesne Tespiti");
+    await dropFiles(
+      screen.getByTestId("upload-dropzone"),
+      [makeFile("rapor.pdf", "application/pdf")],
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("upload-list")).toHaveTextContent(/analizi tamamlanamadı/i);
+    });
+    expect(screen.getByTestId("upload-list")).not.toHaveTextContent(/analiz tamamlandı/i);
+    // Basarili sayilmadigi icin "yukleme bitti" geri cagrimi da tetiklenmemeli.
+    expect(onUploadComplete).not.toHaveBeenCalled();
   });
 });
