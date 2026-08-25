@@ -168,6 +168,25 @@ export interface WireReport {
   assigned_referee_email: string | null;
 }
 
+/**
+ * GET /api/reports/lookup yanıt öğesi.
+ *
+ * KÜNYE düzeyinde: `ai_analysis`, `final_decision`, dosya yolu ve yarışmacı
+ * kimliği BİLEREK yok. Arama bir kapı açmıyor, yalnızca "elimdeki kimliği
+ * çözümle" sorusunu yanıtlıyor.
+ */
+export interface WireReportLookup {
+  report_id: string;
+  project_name: string;
+  team_name: string | null;
+  competition_name: string | null;
+  /** analiz_bekliyor | analiz_edildi | degerlendirildi | hata */
+  evaluation_state: string;
+  assigned_referee_email: string | null;
+  /** assigned -> tam detaya yetkiniz var | metadata_only -> yalnızca bu künye */
+  access: "assigned" | "metadata_only";
+}
+
 /** GET /api/dashboard/stats yanıtı (schemas.DashboardStats) */
 export interface WireDashboardStats {
   total_reports: number;

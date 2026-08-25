@@ -198,10 +198,10 @@ açmasın diye.
 Repo kökünden, aktivasyon gerekmez:
 
 ```bash
-.venv/bin/python ai-doc-analysis/tests/test_analyzer.py         #  32 test
+.venv/bin/python ai-doc-analysis/tests/test_analyzer.py         #  46 test
 .venv/bin/python ai-scoring/tests/test_scorer.py                #  95-102 test *
-cd backend && ../.venv/bin/python -m pytest tests/ -q; cd ..    #  52 test
-cd frontend && npm test; cd ..                                  # 105 test
+cd backend && ../.venv/bin/python -m pytest tests/ -q; cd ..    #  85 test
+cd frontend && npm test; cd ..                                  # 112 test
 ```
 
 \* `google-genai` kuruluysa 102, değilse 95 — Gemini'ye özel testler
@@ -220,7 +220,7 @@ koşturuyor — demo öncesi "sistem gerçekten çalışıyor mu" sorusunun ceva
 
 ```bash
 scripts/dev-backend.sh start
-.venv/bin/python scripts/e2e-test.py      # 37 kontrol
+.venv/bin/python scripts/e2e-test.py      # 46 kontrol
 scripts/dev-backend.sh stop
 ```
 

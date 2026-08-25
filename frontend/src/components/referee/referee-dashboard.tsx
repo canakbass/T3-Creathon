@@ -7,6 +7,7 @@ import type { EvaluationReport } from "@/lib/mock-reports";
 import { ReportList } from "./report-list";
 import { ReportListSkeleton } from "./report-list-skeleton";
 import { ReportDetail } from "./report-detail";
+import { ReportLookup } from "./report-lookup";
 
 interface RefereeDashboardProps {
   /** Provide directly (e.g. in tests) to skip the network fetch entirely. */
@@ -70,6 +71,11 @@ export function RefereeDashboard({ initialReports }: RefereeDashboardProps) {
           {error}
         </div>
       ) : null}
+
+      {/* Arama, listenin USTUNDE: hakemin varsayilan gorunumu kendi
+          atanmis raporlari (asagida); arama, elinde bir kimlik olan
+          basvuruyu bulmak icin. Ikisi karistirilmamali. */}
+      <ReportLookup onOpen={setSelectedId} />
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <aside className="w-full overflow-hidden rounded-2xl border border-border bg-surface shadow-sm lg:w-96 lg:shrink-0">

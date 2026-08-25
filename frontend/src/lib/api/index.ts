@@ -27,6 +27,7 @@ import type {
   WireRationaleDraft,
   WireReferee,
   WireReport,
+  WireReportLookup,
   WireUser,
 } from "./types";
 
@@ -225,6 +226,32 @@ export async function getReport(
         }
       : null,
   };
+}
+
+/** Arama ölçütü — tam olarak BİRİ verilmeli. */
+export type ReportLookupQuery =
+  | { reportId: string }
+  | { teamId: string }
+  | { email: string };
+
+/**
+ * Başvuru kimliği / takım kimliği / yarışmacı e-postası ile rapor arar.
+ *
+ * Hakem kendisine ATANMAMIŞ raporları da arayabilir ama yalnızca KÜNYE
+ * görür — puan, gerekçe, benzerlik bulgusu ve PDF dönmez. Yarışmacı bu ucu
+ * hiç kullanamaz (backend 403).
+ *
+ * Arama TAM EŞLEŞMEDİR: substring/joker yok. Sebep, aramanın envanter
+ * taramaya dönüşmemesi.
+ */
+export async function lookupReports(
+  sorgu: ReportLookupQuery,
+): Promise<WireReportLookup[]> {
+  const p = new URLSearchParams();
+  if ("reportId" in sorgu) p.set("report_id", sorgu.reportId);
+  else if ("teamId" in sorgu) p.set("team_id", sorgu.teamId);
+  else p.set("email", sorgu.email);
+  return apiFetch<WireReportLookup[]>(`/api/reports/lookup?${p.toString()}`);
 }
 
 export interface UploadReportInput {

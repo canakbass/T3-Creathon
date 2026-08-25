@@ -11,10 +11,10 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 
 | Klasör | Kişi | İçerik | Durum |
 |---|---|---|---|
-| `ai-doc-analysis/` | Hasan | Dil/şablon/başlık kontrolü | ✅ Çalışıyor, gerçek veriyle test edildi (32 test) |
+| `ai-doc-analysis/` | Hasan | Dil/şablon/başlık kontrolü + şablondan otomatik çıkarım | ✅ Çalışıyor, gerçek veriyle test edildi (46 test) |
 | `ai-scoring/` | Hayrettin | Kategori, benzerlik, kriter puanlama | ✅ Çalışıyor, backend'e entegre edildi (102 test) — mock'lar kaldırıldı |
-| `backend/` | Mustafa | FastAPI — API, veri modeli, auth, yarışma/atama | ✅ Çalışıyor (52 test); SQLite veya Supabase Postgres |
-| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Backend'e bağlı (105 test); tüm mock veri kaldırıldı |
+| `backend/` | Mustafa | FastAPI — API, veri modeli, auth, yarışma/takım/atama | ✅ Çalışıyor (85 test); SQLite veya Supabase Postgres |
+| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Backend'e bağlı (112 test); tüm mock veri kaldırıldı |
 | `docs/` | — | Ortak dokümanlar, API sözleşmesi, MVP kuralları | Güncel |
 
 ## MVP'nin 6 zorunlu maddesi — hepsi tamam
@@ -204,6 +204,105 @@ tutarsızlık bitti, tüm AI çıktıları da Türkçe.
   yalnızca Yarışma Yöneticisi panelinde. Backend her iki role de izin
   veriyor (`RoleChecker(["COMPETITION_MANAGER", "COMPETITOR"])`).
 
+## TEKNOFEST'in gerçek yapısına uyum (2026-08-26)
+
+Elimizdeki örnek veri paketinin içindeki **resmî TEKNOFEST belgeleri**
+okundu (`ai-doc-analysis/sample_reports/havacilikta_yz_ktr/`) ve sistem
+onlara göre düzeltildi. Aşağıdaki her madde varsayım değil, şartnameden
+veya resmî şablon dosyasından alıntıyla doğrulanmış.
+
+### "Kategori" TEKNOFEST'te ne demek?
+
+**Katılımcı seviyesi** demek — teknoloji alanı değil.
+
+- `sartname_genel_2026.pdf`: *"Mezun **kategorisi** lise mezunu ve üniversite
+  mezunlarını kapsamaktadır."*
+- Aynı belge: *"Yarışmacılar aynı proje ile yalnızca tek bir **kategoriye**
+  veya tek bir **yarışmaya** başvurabilir"* — kategori ve yarışma ayrı şeyler.
+- `sartname_teknik_2026.pdf`: "kategori" kelimesi **sıfır kez** geçiyor.
+
+Teknoloji alanını **yarışmanın kendisi** belirliyor ("Havacılıkta Yapay Zeka
+Yarışması"). Bizdeki 6 İngilizce kategori (`Robotics & Automation`,
+`FinTech`, `Game Design`…) TEKNOFEST'le ilgisiz.
+
+Bulunan somut hata: yönetici kategoriyi **iki kez** seçiyordu ve ikincisi
+(şablon formundaki) hiçbir yere kaydedilmiyordu — zorunlu bir alan
+dolduruluyor, veri çöpe gidiyordu. Kaldırıldı.
+
+### Bir yarışmanın kaç şablonu var?
+
+**En az iki.** `sartname_teknik_2026.pdf` madde 5: *"Yarışmacı takımlardan
+**iki ayrı doküman** yazmaları beklenmektedir… Ön Tasarım Raporu yarışma
+katılımı ve Final Tasarım Raporu puanlandırma sürecinde kullanılacağı için
+iki raporun da teslim edilmesi şarttır."* Şablonları farklı tarihlerde
+yayımlanıyor ve **puan ağırlıkları farklı** — `Puan_Rubrigi.md` bunu
+belgeliyor (2022 KTR: 5/15/25/25/25/5 · 2026 ÖTR: 5/10/30/10/10/30/5/5).
+
+Bu yüzden "Şablon adı" alanı silinmedi, gerçek karşılığına bağlandı:
+**rapor türü**. Sabit liste değil serbest metin — TEKNOFEST terminolojiyi
+yıldan yıla değiştiriyor (2022'de "Kritik Tasarım Raporu", 2026'da aynı
+aşama "Final Tasarım Raporu").
+
+### Başvuruyu kim yapıyor?
+
+**Takım.** *"Takım Kaptanı: Takımın organizasyonundan sorumlu olan… kişi"*,
+*"Takım Danışmanı: Her takım için en fazla bir (1) öğretmen/eğitmen/
+akademisyen"*. Kayıtlar TEKNOFEST'in kendi sisteminde: *"KYS: TEKNOFEST
+Kurumsal Yönetim Sistemi"* ve raporlar `t3kys.com`'a teslim ediliyor.
+
+Bizde rapor yalnızca **yükleyen kişiye** bağlıydı. İki sonucu vardı:
+takım arkadaşı kendi takımının sonucunu göremiyordu; ve şartname AKIŞ 01
+yöneticinin *"raporları sisteme aktardığını"* söylediği hâlde, yönetici
+aktarınca raporun sonucunu **hiçbir yarışmacı göremiyordu** — yani
+şartnamenin kendi akışı, şartnamenin AKIŞ 03'ünü imkânsız kılıyordu.
+
+Artık sahiplik takımda. **Takım yönetimi bu sistemin işi değil** — takım
+ekleme/düzenleme uç noktası yok ve olmayacak; kayıtlar dışarıdan besleniyor
+(`Team.external_ref` gerçek entegrasyonda eşleştirme anahtarı).
+
+### Resmî şablondan otomatik doldurma
+
+TEKNOFEST'in resmî şablon dosyaları başlıkları **ve puan ağırlıklarını**
+Word başlık stillerinde zaten taşıyor. Yönetici dosyayı yüklüyor, form
+kendiliğinden doluyor:
+
+| Dosya | Sonuç |
+|---|---|
+| `sablon_OTR_2026.docx` | 8 başlık, ağırlık toplamı **tam 100** |
+| `referans_2026_pdr_sablonu_universite.docx` | 5 başlık, toplam **100** |
+
+Üç tuzak gerçek dosyayla ölçülüp çözüldü: alt başlıklar ana başlıklarla aynı
+stili kullandığı için naif toplam **130** veriyor; Türkçe noktalı İ yüzünden
+`"ŞEKİL LİSTESİ".casefold()` düz metinle eşleşmiyor; Word'ün içindekiler
+alanı sayfa numarasını başlığa yapıştırıyor.
+
+Çıkarım **hiçbir şeyi kaydetmiyor** — öneri dönüyor, son söz yöneticide.
+
+### Takımın kendi raporu artık intihal sayılmıyor
+
+Ölçülen davranış: bir takım ÖTR'sini gönderip ardından FTR'sini
+gönderdiğinde ikinci rapor kendi öncekine karşı **100 benzerlik** alıp
+"yüksek oranda birebir örtüşme" olarak işaretleniyordu. Yani sistem,
+şartnamenin **zorunlu tuttuğu** davranışı intihal sayıyordu. Şartnamenin
+kendi ifadesi doğru ölçüm yerini söylüyor: *"**başvurular arasında** yüksek
+benzerlik gösteren içerikler"* — bir takımın iki raporu iki ayrı başvuru
+değil, aynı başvurunun iki aşaması. Dışlama sessiz değil, bulgularda yazıyor.
+
+### Hakem araması
+
+Hakem artık kendisine atanmamış başvuruları da bulabiliyor
+(`GET /api/reports/lookup`) — ama yalnızca **künye** düzeyinde: puan,
+gerekçe, benzerlik bulgusu ve PDF dönmüyor. Arama tam eşleşme (parça arama
+yok), atanmamış erişimler denetim izine yazılıyor ve yarışmacı bu ucu hiç
+kullanamıyor.
+
+Bu bilinçli bir gevşetme: aynı sistemde tam tersi bir açık kapatılmıştı
+(atanmamış hakem başka bir yarışmacının tam AI analizini okuyabiliyordu).
+Gevşetmeyi savunulabilir kılan şey, kapsamın künyeyle sınırlı olması ve
+iz bırakması.
+
+---
+
 ## Güvenlik ve bütünlük denetimi (2026-08-25)
 
 Sistemin tamamı düşmanca bir gözle tarandı; **26 aday bulgunun tamamı canlı
@@ -257,19 +356,19 @@ frontend Vercel'e.
 Ayrıntılı kurulum için **[KURULUM.md](KURULUM.md)**. Kısa hâli:
 
 ```bash
-# ai-doc-analysis (Hasan)          -> 32 test
+# ai-doc-analysis (Hasan)          -> 46 test
 .venv/bin/python ai-doc-analysis/tests/test_analyzer.py
 
 # ai-scoring (Hayrettin)           -> 102 test
 .venv/bin/python ai-scoring/tests/test_scorer.py
 
-# backend (Mustafa)                -> 52 test
+# backend (Mustafa)                -> 85 test
 cd backend && ../.venv/bin/python -m pytest tests/ -q; cd ..
 
-# frontend (Mahmut)                -> 105 test
+# frontend (Mahmut)                -> 112 test
 cd frontend && npm install && npm test; cd ..
 
-# uctan uca, CALISAN sunucuya karsi -> 37 kontrol
+# uctan uca, CALISAN sunucuya karsi -> 46 kontrol
 scripts/dev-backend.sh start
 .venv/bin/python scripts/e2e-test.py
 scripts/dev-backend.sh stop
@@ -308,18 +407,34 @@ python -c "import secrets; print(secrets.token_hex(32))"
 python -m uvicorn main:app --reload
 ```
 
-Seed kullanıcıları (ilk açılışta oluşur): `manager@`, `referee@`,
-`competitor@`, `evaluator@teknofest.org` — hepsinin şifresi `password123`.
+Seed kullanıcıları (ilk açılışta oluşur, şifreleri `password123`):
 
-### Son test durumu (2026-08-25)
+| Hesap | Rol | Takım |
+|---|---|---|
+| `manager@teknofest.org` | Yarışma Yöneticisi | — |
+| `referee@teknofest.org` · `referee2@teknofest.org` | Hakem | — |
+| `evaluator@teknofest.org` | Değerlendirme Yöneticisi | — |
+| `competitor@teknofest.org` | Yarışmacı | **Glieser (kaptan)** + **ADYU AI TEAM** |
+| `competitor2@teknofest.org` | Yarışmacı | Glieser (üye) |
+| `rakip@teknofest.org` | Yarışmacı | Zebot |
+
+Çok rollü test hesabı: `asdfghjkl@gmail.com` / `asdfghjkl` — dört rolün
+hepsi, girişte rol seçim ekranı çıkar.
+
+Takım kurgusu bilinçli, üç kuralı birden gösteriyor: `competitor2@`
+kendi yüklemediği (yöneticinin aktardığı) Glieser raporunu **görebilir**;
+`rakip@` aynı raporu **göremez**; `competitor@` iki takımda olduğu için
+rapor yüklerken **hangi takım adına** yüklediğini seçmek zorundadır.
+
+### Son test durumu (2026-08-26)
 
 | Paket | Sonuç |
 |---|---|
-| `ai-doc-analysis` | 32 başarılı, 0 başarısız |
+| `ai-doc-analysis` | 46 başarılı, 0 başarısız |
 | `ai-scoring` | 102 başarılı, 0 başarısız |
-| `backend` (pytest) | 52 başarılı, 0 başarısız |
-| `frontend` (jest) | 105 başarılı, 0 başarısız |
-| `scripts/e2e-test.py` (canlı sunucu) | 37 başarılı, 0 başarısız |
+| `backend` (pytest) | 85 başarılı, 0 başarısız |
+| `frontend` (jest) | 112 başarılı, 0 başarısız |
+| `scripts/e2e-test.py` (canlı sunucu) | 46 başarılı, 0 başarısız |
 | `frontend` (next build) | başarılı |
 | Uçtan uca — API akışı | 40 başarılı, 0 başarısız |
 | Uçtan uca — arayüz istek şekilleri (canlı backend) | 32 başarılı, 0 başarısız |
