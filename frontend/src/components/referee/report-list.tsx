@@ -9,9 +9,27 @@ interface ReportListProps {
   reports: EvaluationReport[];
   selectedId: string | null;
   onSelect: (reportId: string) => void;
+  /**
+   * Liste boşken gösterilecek başlık ve açıklama.
+   *
+   * NEDEN PROP: varsayılan metin ("Henüz rapor yok") hakem panosunda artık
+   * yanıltıcı. Hakem yalnızca KENDİSİNE ATANMIŞ raporları görüyor; sistemde
+   * onlarca rapor olabilir ama hiçbiri ona atanmamışsa liste boş gelir.
+   * "Henüz rapor yok" cümlesi bu durumda hakemi "kimse başvurmamış" ya da
+   * "sistem bozuk" sonucuna götürür — oysa yapması gereken şey yöneticiden
+   * atama istemek.
+   */
+  emptyTitle?: string;
+  emptyHint?: string;
 }
 
-export function ReportList({ reports, selectedId, onSelect }: ReportListProps) {
+export function ReportList({
+  reports,
+  selectedId,
+  onSelect,
+  emptyTitle = "Henüz rapor yok",
+  emptyHint = "Gönderilen değerlendirme raporları burada görünecek.",
+}: ReportListProps) {
   if (reports.length === 0) {
     return (
       <div
@@ -29,8 +47,8 @@ export function ReportList({ reports, selectedId, onSelect }: ReportListProps) {
             <path d="M14 3v5h5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
           </svg>
         </span>
-        <p className="text-sm font-semibold text-foreground">Henüz rapor yok</p>
-        <p className="text-xs text-muted">Gönderilen değerlendirme raporları burada görünecek.</p>
+        <p className="text-sm font-semibold text-foreground">{emptyTitle}</p>
+        <p className="text-xs text-muted">{emptyHint}</p>
       </div>
     );
   }

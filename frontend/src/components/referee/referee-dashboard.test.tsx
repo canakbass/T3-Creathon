@@ -25,10 +25,16 @@ describe("RefereeDashboard", () => {
     expect(screen.queryByTestId("report-detail")).not.toBeInTheDocument();
   });
 
-  it("shows an empty state in the sidebar when there are no reports", () => {
+  // Hakem yalnizca KENDISINE ATANMIS raporlari gorur; liste bos oldugunda
+  // "henuz rapor yok" demek yaniltici olurdu (sistemde onlarca rapor
+  // olabilir). Mesajin hakemi dogru eyleme -yoneticiden atama istemeye-
+  // yonlendirdigini dogruluyoruz.
+  it("shows an assignment-aware empty state in the sidebar", () => {
     render(<RefereeDashboard initialReports={[]} />);
 
-    expect(screen.getByTestId("report-list-empty")).toHaveTextContent(/henüz rapor yok/i);
+    const bos = screen.getByTestId("report-list-empty");
+    expect(bos).toHaveTextContent(/size atanmış rapor yok/i);
+    expect(bos).toHaveTextContent(/yarışma yöneticisi/i);
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 

@@ -339,6 +339,108 @@ check(
     str(sonuc_db["uyarilar"]),
 )
 
+# --- Yarismanin kriterleri PUANI GERCEKTEN belirliyor mu -------------------
+#
+# REGRESYON: agirlikli toplam, Yarisma Yoneticisi'nin tanimladigi
+# kriterlerden DEGIL sabit TEKNOFEST rubriginden hesaplaniyordu. Yonetici
+# "Ozgunluk %70, Kaynakca %30" dese bile puan "Takim Semasi %5, Algoritmalar
+# %25, ..." uzerinden cikiyor, yoneticinin agirliklari hicbir yere
+# girmiyordu. Hakem ekranda "Agirlikli toplam 25/100 - onerilen sonuc: ret"
+# goruyor ve bunun yarismanin rubriginden geldigini saniyordu. Bu haliyle
+# "Kriter ve Sablon Tanimi" ekrani gorunurde calisan ama sonuca hic etki
+# etmeyen bir ekrandi.
+# Iki kriter BILEREK farkli puan alan bolumlerden secildi (Ozgunluk 100,
+# Proje Mevcut Durum 67). Ikisi de 100 alsaydi agirlik testi bos gecerdi -
+# agirliklar tamamen yok sayilsa bile toplam yine 100 cikardi.
+yarisma_kriterleri = [
+    {"id": "k1", "title": "Özgünlük", "weight": 70, "max_score": 100},
+    {"id": "k2", "title": "Proje Mevcut Durum Değerlendirmesi", "weight": 30,
+     "max_score": 100},
+]
+sonuc_yr = evaluate_criteria(ORNEK, yarisma_kriterleri, RULES, SCORING, motor="kural")
+check(
+    "yarismanin rubrigi kullanildi olarak isaretleniyor",
+    sonuc_yr["yarisma_rubrigi_kullanildi"] is True,
+    str(sonuc_yr.get("yarisma_rubrigi_kullanildi")),
+)
+check(
+    "kriter kirilimi YALNIZCA yoneticinin kriterlerini iceriyor",
+    {k["kriter"] for k in sonuc_yr["kriter_puanlari"]}
+    == {"Özgünlük", "Proje Mevcut Durum Değerlendirmesi"},
+    str([k["kriter"] for k in sonuc_yr["kriter_puanlari"]]),
+)
+check(
+    "yoneticinin AGIRLIKLARI kullaniliyor (70/30)",
+    {k["kriter"]: k["agirlik"] for k in sonuc_yr["kriter_puanlari"]}
+    == {"Özgünlük": 70, "Proje Mevcut Durum Değerlendirmesi": 30},
+    str({k["kriter"]: k["agirlik"] for k in sonuc_yr["kriter_puanlari"]}),
+)
+check(
+    "sabit rubrigin kalemleri gerekceye sizmiyor",
+    "Takım Şeması" not in sonuc_yr["gerekce"],
+    sonuc_yr["gerekce"][:200],
+)
+# Agirlik gercekten toplami degistirmeli: ayni rapor, ters agirliklarla
+# farkli puan vermeli. Aksi halde "agirlik kullaniliyor" testi bos gecerdi.
+ters = [
+    {"id": "k1", "title": "Özgünlük", "weight": 30, "max_score": 100},
+    {"id": "k2", "title": "Proje Mevcut Durum Değerlendirmesi", "weight": 70,
+     "max_score": 100},
+]
+sonuc_ters = evaluate_criteria(ORNEK, ters, RULES, SCORING, motor="kural")
+check(
+    "agirliklari degistirmek toplam puani degistiriyor",
+    sonuc_ters["toplam_puan"] != sonuc_yr["toplam_puan"],
+    f"{sonuc_yr['toplam_puan']} vs {sonuc_ters['toplam_puan']}",
+)
+
+# Hicbiri olculemiyorsa: uretilen sayi yarismanin rubrigi DEGIL ve bu
+# aciga cikmali. Alakasiz bir olcume dayanan "ret" onerisi hakemi yanlis
+# yone iter; oneri "revizyon"a (insan bakmali) cekiliyor.
+olculemez = [
+    {"id": "k1", "title": "ZEBRAKRITER Havacılık Emniyeti", "weight": 90},
+    {"id": "k2", "title": "PELIKAN Maliyet Analizi", "weight": 10},
+]
+sonuc_olculemez = evaluate_criteria(ORNEK, olculemez, RULES, SCORING, motor="kural")
+check(
+    "hicbiri olculemiyorsa yarisma rubrigi kullanilmadi olarak isaretleniyor",
+    sonuc_olculemez["yarisma_rubrigi_kullanildi"] is False,
+)
+check(
+    "puanin yarismanin kriterlerinden GELMEDIGI gerekcede acikca yaziyor",
+    "HESAPLANMADI" in sonuc_olculemez["gerekce"],
+    sonuc_olculemez["gerekce"][:300],
+)
+check(
+    "alakasiz olcumden 'ret' onerilmiyor, insana yonlendiriliyor",
+    sonuc_olculemez["onerilen_sonuc"] == "revise",
+    sonuc_olculemez["onerilen_sonuc"],
+)
+check(
+    "kriteri olmayan yarismada davranis degismedi (sabit rubrik)",
+    evaluate_criteria(ORNEK, None, RULES, SCORING, motor="kural")[
+        "yarisma_rubrigi_kullanildi"
+    ]
+    is False,
+)
+
+# Kismi kapsama: bir kriter olculebiliyor, digeri olculemiyor
+kismi = [
+    {"id": "k1", "title": "Özgünlük", "weight": 40},
+    {"id": "k2", "title": "ZEBRAKRITER Havacılık Emniyeti", "weight": 60},
+]
+sonuc_kismi = evaluate_criteria(ORNEK, kismi, RULES, SCORING, motor="kural")
+check(
+    "kismi kapsamada otomatik puanin agirlik orani aciga cikariliyor",
+    any("%40" in u for u in sonuc_kismi["uyarilar"]),
+    str(sonuc_kismi["uyarilar"]),
+)
+check(
+    "kismi kapsamada kapsanan_agirlik_orani dogru",
+    abs(sonuc_kismi["kapsanan_agirlik_orani"] - 0.4) < 0.001,
+    str(sonuc_kismi["kapsanan_agirlik_orani"]),
+)
+
 # Bos / eksik bolumler
 bos_rules = dict(RULES)
 bos_rules["zorunlu_basliklar"] = ["Bulunmayan Baslik A", "Bulunmayan Baslik B"]

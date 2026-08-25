@@ -81,7 +81,13 @@ export function RefereeDashboard({ initialReports }: RefereeDashboardProps) {
           {reports === null ? (
             <ReportListSkeleton />
           ) : (
-            <ReportList reports={reports} selectedId={selectedId} onSelect={setSelectedId} />
+            <ReportList
+              reports={reports}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              emptyTitle="Size atanmış rapor yok"
+              emptyHint="Raporları hakemlere yarışma yöneticisi dağıtır. Size atama yapıldığında burada görünecek."
+            />
           )}
         </aside>
 

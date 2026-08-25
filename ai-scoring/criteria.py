@@ -129,6 +129,18 @@ _SINYAL_ADLARI = {
 }
 
 
+def _gosterim_adiyla(puan_kalemi, tanim):
+    """Kriter adini Yarisma Yoneticisi'nin yazdigi baslikla degistirir.
+
+    Olcum rubrik kalemi uzerinden yapiliyor ("Ozgunluk"), ama hakem ekranda
+    yoneticinin tanimladigi basligi gormeli ("Ozgunluk ve Yenilikcilik") -
+    aksi halde kendi tanimladigi kriteri gerekcede bulamaz.
+    """
+    if tanim.get("gosterim_adi"):
+        puan_kalemi = {**puan_kalemi, "kriter": tanim["gosterim_adi"]}
+    return puan_kalemi
+
+
 def _rule_score_section(baslik, bolum_metni, tanim, scoring_rules):
     """Tek bir bolumu kural motoruyla puanlar."""
     if bolum_metni is None:
@@ -300,6 +312,53 @@ def _match_db_criteria(criteria_list, rubrik, scoring_rules):
     return eslesen, olculemeyen
 
 
+def _yarismanin_rubrigi(criteria_list, eslesen, rubrik):
+    """Yarismanin kriterlerinden puanlama rubrigi uretir.
+
+    NEDEN VAR: agirlikli toplam, Yarisma Yoneticisi'nin tanimladigi
+    kriterlerden DEGIL, sabit TEKNOFEST rubriginden hesaplaniyordu.
+    Yonetici "Havacilik Emniyeti %90" dese bile puan "Takim Semasi %5,
+    Algoritmalar %25, ..." uzerinden cikiyor, yoneticinin agirliklari hicbir
+    yere girmiyordu. Hakem ekranda "Agirlikli toplam 25/100 - onerilen
+    sonuc: ret" goruyor ve bunun yarismanin rubriginden geldigini sanıyor.
+    Bu, "Kriter ve Sablon Tanimi" ekranini gorunurde calisan ama sonuca
+    hic etki etmeyen bir ekran haline getiriyordu.
+
+    Olculebilir bir karsiligi OLMAYAN kriter rubrige alinmiyor: uydurma
+    puan, puan vermemekten kotudur (bkz. _match_db_criteria). Bunlar
+    "olculemeyen" olarak zaten aciga cikariliyor.
+
+    Doner: (rubrik_kalemleri, kapsanan_agirlik, toplam_agirlik)
+    Yarismanin hic kriteri yoksa ([], 0, 0) doner ve cagiran sabit
+    rubrige duser.
+    """
+    tanim_by_ad = {t["kriter"]: t for t in rubrik}
+    kalemler = []
+    kapsanan = 0
+    toplam = 0
+    for kriter in criteria_list or []:
+        baslik = (kriter.get("title") or "").strip()
+        if not baslik:
+            continue
+        # Agirlik verilmemisse esit dagitim varsayimi yerine rubrikteki
+        # degeri kullanmiyoruz - yoneticinin niyeti belirsizken sayi
+        # uydurmak yerine 1 birim veriyoruz (hepsi esit agirlikta olur).
+        agirlik = kriter.get("weight")
+        agirlik = 1 if agirlik in (None, 0) else agirlik
+        toplam += agirlik
+        hedef = eslesen.get(baslik)
+        if hedef is None:
+            continue
+        tanim = dict(tanim_by_ad[hedef])
+        tanim["agirlik"] = agirlik
+        # Hakem ekranda YONETICININ yazdigi basligi gormeli; olcum ise
+        # eslestigi rubrik kalemi uzerinden yapiliyor.
+        tanim["gosterim_adi"] = baslik
+        kalemler.append(tanim)
+        kapsanan += agirlik
+    return kalemler, kapsanan, toplam
+
+
 def evaluate_criteria(
     pdf_path,
     criteria_list=None,
@@ -335,11 +394,23 @@ def evaluate_criteria(
     if "hata" in rapor:
         return {"hata": rapor["hata"]}
 
-    rubrik = scoring_rules["kriter_rubrigi"]["bolumler"]
+    varsayilan_rubrik = scoring_rules["kriter_rubrigi"]["bolumler"]
     bolumler = rapor["bolumler"]
-    eksik_bolumler = [t["kriter"] for t in rubrik if t["kriter"] not in bolumler]
 
-    _, olculemeyen = _match_db_criteria(criteria_list, rubrik, scoring_rules)
+    eslesen, olculemeyen = _match_db_criteria(
+        criteria_list, varsayilan_rubrik, scoring_rules
+    )
+    yarisma_rubrigi, kapsanan_agirlik, yarisma_agirligi = _yarismanin_rubrigi(
+        criteria_list, eslesen, varsayilan_rubrik
+    )
+
+    # Yarismanin kriterlerinden en az biri olculebiliyorsa puan ONLARDAN
+    # hesaplanir. Hicbiri olculemiyorsa sabit rubrige dusuyoruz - ama o
+    # zaman uretilen sayi yarismanin rubrigi DEGIL ve gerekcede boyle
+    # yaziyor (bkz. asagida yarisma_rubrigi bos dali).
+    rubrik = yarisma_rubrigi or varsayilan_rubrik
+    yarismanin_rubrigi_kullanildi = bool(yarisma_rubrigi)
+    eksik_bolumler = [t["kriter"] for t in rubrik if t["kriter"] not in bolumler]
 
     uyarilar = []
     kullanilan_motor = "kural"
@@ -383,24 +454,32 @@ def evaluate_criteria(
                     "Claude API bu kriter için puan döndürmedi; kural tabanlı ölçüm "
                     "kullanıldı. " + yedek["gerekce"]
                 )
-                kriter_puanlari.append(yedek)
+                kriter_puanlari.append(_gosterim_adiyla(yedek, tanim))
                 continue
             puan = max(0, min(100, int(llm_kalem.get("puan", 0))))
             kriter_puanlari.append(
-                {
-                    "kriter": ad,
-                    "puan": puan,
-                    "agirlik": tanim["agirlik"],
-                    "gerekce": (llm_kalem.get("gerekce") or "").strip()
-                    or "Gerekçe döndürülmedi.",
-                    "olculdu": ad in bolumler,
-                }
+                _gosterim_adiyla(
+                    {
+                        "kriter": ad,
+                        "puan": puan,
+                        "agirlik": tanim["agirlik"],
+                        "gerekce": (llm_kalem.get("gerekce") or "").strip()
+                        or "Gerekçe döndürülmedi.",
+                        "olculdu": ad in bolumler,
+                    },
+                    tanim,
+                )
             )
         guclu_yonler = [s for s in llm_veri.get("guclu_yonler", []) if s]
         gelisim_onerileri = [s for s in llm_veri.get("gelisim_onerileri", []) if s]
     else:
         kriter_puanlari = [
-            _rule_score_section(t["kriter"], bolumler.get(t["kriter"]), t, scoring_rules)
+            _gosterim_adiyla(
+                _rule_score_section(
+                    t["kriter"], bolumler.get(t["kriter"]), t, scoring_rules
+                ),
+                t,
+            )
             for t in rubrik
         ]
         guclu_yonler, gelisim_onerileri = _derive_feedback(kriter_puanlari)
@@ -425,11 +504,38 @@ def evaluate_criteria(
             "hakem elle değerlendirmeli: " + ", ".join(olculemeyen) + "."
         )
 
+    # Puanin NEYE dayandigini hakemden saklamiyoruz.
+    if criteria_list and not yarismanin_rubrigi_kullanildi:
+        # En agir durum: yoneticinin tanimladigi kriterlerin HICBIRI
+        # otomatik olculemiyor. Uretilen sayi yarismanin rubrigi degil,
+        # genel TEKNOFEST rubrigi. Bu haliyle bir "ret" onerisi hakemi
+        # alakasiz bir olcume dayanarak yanlis yone iter; oneriyi
+        # "revizyon"a (yani insan bakmali) cekiyoruz.
+        uyarilar.append(
+            "DİKKAT: bu puan yarışmanın kriterlerinden HESAPLANMADI. Yarışma "
+            "Yöneticisi'nin tanımladığı kriterlerin hiçbirinin otomatik ölçümü "
+            "yok; gösterilen sayı genel TEKNOFEST rubriğinden geliyor ve "
+            "yarışmanın rubriğini temsil etmiyor. Puanlamayı hakem elle yapmalı."
+        )
+        onerilen_sonuc = "revise"
+    elif yarismanin_rubrigi_kullanildi and kapsanan_agirlik < yarisma_agirligi:
+        yuzde = round(100 * kapsanan_agirlik / (yarisma_agirligi or 1))
+        uyarilar.append(
+            f"Otomatik puan, yarışmanın toplam ağırlığının %{yuzde} kadarını "
+            "kapsıyor; kalan kriterleri hakem elle puanlamalı."
+        )
+
     return {
         "motor": kullanilan_motor,
         "kriter_puanlari": kriter_puanlari,
         "toplam_puan": toplam_puan,
         "onerilen_sonuc": onerilen_sonuc,
+        # Puanin yarismanin kendi rubriginden mi geldigi. Arayuz bunu
+        # kullanarak puani farkli sunabilir; gerekcede de yaziyor.
+        "yarisma_rubrigi_kullanildi": yarismanin_rubrigi_kullanildi,
+        "kapsanan_agirlik_orani": (
+            round(kapsanan_agirlik / yarisma_agirligi, 3) if yarisma_agirligi else None
+        ),
         "gerekce": _build_rationale(
             kriter_puanlari, toplam_puan, onerilen_sonuc, kullanilan_motor,
             eksik_bolumler, uyarilar, esikler,
