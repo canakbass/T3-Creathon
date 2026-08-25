@@ -266,6 +266,29 @@ def set_status(
                 ),
             )
 
+    # GERI DONUS KORUMASI. Asamalar arasinda ileri gitmek serbest, ama karar
+    # verilmis bir yarismayi geri almak degil: 'completed' -> 'open' hicbir
+    # engel olmadan calisiyordu ve sonuclar aciklandiktan SONRA basvurulari
+    # yeniden aciyordu. Hakemler degerlendirmesini bitirmisken gelen yeni
+    # raporlar hic degerlendirilmez, mevcut kararlar da yarim kalirdi.
+    if ASAMALAR.index(govde.status) < ASAMALAR.index(y.status):
+        karar_sayisi = (
+            db.query(models.FinalDecision)
+            .join(models.Report, models.FinalDecision.report_id == models.Report.id)
+            .filter(models.Report.competition_id == competition_id)
+            .count()
+        )
+        if karar_sayisi:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Bu yarismada {karar_sayisi} hakem karari verilmis; asama "
+                    f"'{y.status}' konumundan '{govde.status}' konumuna geri "
+                    "alinamaz. Karar verilmis bir yarismanin basvurularini "
+                    "yeniden acmak mevcut degerlendirmeleri gecersiz kilar."
+                ),
+            )
+
     y.status = govde.status
     db.commit()
     db.refresh(y)
@@ -275,13 +298,33 @@ def set_status(
 def yarismanin_kurallari(y: Optional[models.Competition]) -> Optional[dict]:
     """Yarismanin sablon kurallarini ai-doc-analysis'in bekledigi bicime cevirir.
 
-    Yarisma yoksa ya da kurallari tanimli degilse None doner; o durumda
+    Yarisma yoksa ya da HIC sablon tanimi yapilmadiysa None doner; o durumda
     analiz modulu docs/mvp-rules.json'daki varsayilanlari kullanir.
+
+    ONCEDEN NE KIRIKTI: yalnizca `required_headings` bos diye TUM kurallar
+    atiliyordu. Yonetici "Ingilizce de kabul, en fazla 20 sayfa" tanimlayip
+    zorunlu baslik listesini bos biraksa, raporu hicbir uyari olmadan
+    sabit TEKNOFEST varsayilanlarina (yalnizca Turkce, TEKNOFEST basliklari)
+    gore degerlendiriliyordu - yani kendi yazdigi kurallarin tam tersine.
+    Artik sablonun HERHANGI bir alani doluysa yarismanin kurallari
+    kullaniliyor; baslik listesi bossa "zorunlu baslik yok" olarak
+    uygulaniyor, cunku yoneticinin tanimi bu.
     """
     if y is None:
         return None
     basliklar = _json_yukle(y.required_headings, [])
-    if not basliklar:
+    tanimli = any(
+        deger is not None
+        for deger in (
+            y.accepted_languages,
+            y.required_headings,
+            y.heading_synonyms,
+            y.min_pages,
+            y.max_pages,
+            y.min_section_chars,
+        )
+    )
+    if not tanimli:
         return None
     return {
         "kabul_edilen_diller": _json_yukle(y.accepted_languages, ["tr"]),

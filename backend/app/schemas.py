@@ -58,9 +58,13 @@ class CompetitionTemplate(BaseModel):
     min_section_chars: Optional[int] = None
 
 class CriterionInput(BaseModel):
-    title: str
+    title: str = Field(min_length=1, max_length=200)
     description: Optional[str] = None
-    weight: int
+    # Agirlik TEK TEK de dogrulanmali, yalnizca toplamı 100 olsun diye degil:
+    # [{"A": 150}, {"B": -50}] toplamı 100 ediyordu ve kabul ediliyordu.
+    # Negatif agirlik, agirlikli ortalamada iyi bir kriterin toplami
+    # DUSURMESI anlamina gelirdi - hakemin anlayamayacagi bir sonuc.
+    weight: int = Field(ge=1, le=100)
 
 class CompetitionCriteriaSet(BaseModel):
     criteria: List[CriterionInput]

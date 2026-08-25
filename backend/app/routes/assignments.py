@@ -287,6 +287,28 @@ def reassign(
             detail="Bu rapor icin nihai karar verilmis; hakemi degistirilemez.",
         )
 
+    # Hakem, yarismanin GOREVLI HAKEM listesinde olmali. Arayuz zaten
+    # yalnizca bu listeyi gosteriyor; API'de kontrol yoktu, yani dogrudan
+    # istekle listede olmayan birine atama yapilabiliyordu. O kisi
+    # auto-assign'in yuk hesabina hic girmedigi icin dagitim da bozulurdu.
+    if rapor.competition_id:
+        gorevli = (
+            db.query(models.CompetitionReferee)
+            .filter(
+                models.CompetitionReferee.competition_id == rapor.competition_id,
+                models.CompetitionReferee.referee_id == hakem.id,
+            )
+            .first()
+        )
+        if not gorevli:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Bu hakem yarismanin gorevli hakem listesinde degil. "
+                    "Once hakemi yarismaya ekleyin."
+                ),
+            )
+
     atama = rapor.assignment
     if atama:
         atama.referee_id = hakem.id
@@ -318,6 +340,21 @@ def unassign(
     ).first()
     if not atama:
         raise HTTPException(status_code=404, detail="Bu rapor icin atama yok.")
+
+    # PUT'taki "karar verilmis rapor devredilemez" kuralinin ayni gerekcesi
+    # burada da gecerli - ustelik DELETE + PUT ikilisi o kurali tamamen
+    # atlatmanin yolu oluyordu: once atamayi sil, sonra baskasina ata.
+    # Karar kaydi hangi hakemin verdigini tutuyor ama atamanin silinmesi
+    # "bu raporu kim degerlendirdi" izini kopariyor.
+    if atama.report and atama.report.final_decision is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Bu rapor icin nihai karar verilmis; atamasi kaldirilamaz "
+                "(denetim izi korunur)."
+            ),
+        )
+
     db.delete(atama)
     db.commit()
 
