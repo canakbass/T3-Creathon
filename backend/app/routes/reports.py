@@ -169,9 +169,34 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
         # sessizce bosalir, intihal kontrolu hicbir hata vermeden "benzer
         # rapor yok" demeye baslardi. Bu yuzden storage.local_path() ile
         # her nesne gecici bir yerel dosyaya indiriliyor.
-        other_reports = db.query(models.Report).filter(models.Report.id != report_id).all()
-
         report = db.query(models.Report).filter(models.Report.id == report_id).first()
+
+        karsilastirma_sorgusu = db.query(models.Report).filter(
+            models.Report.id != report_id
+        )
+        # AYNI TAKIMIN kendi raporlari karsilastirmadan CIKARILIYOR.
+        #
+        # Sartname madde 5: "BASVURULAR ARASINDA yuksek benzerlik gosteren
+        # icerikler tespit edilir." Bir takimin iki raporu iki AYRI BASVURU
+        # degil, ayni basvurunun iki asamasidir - ustelik teknik sartname
+        # madde 5 ikisini de ZORUNLU kiliyor: "On Tasarim Raporu yarisma
+        # katilimi ve Final Tasarim Raporu puanlandirma surecinde
+        # kullanilacagi icin iki raporun da teslim edilmesi sarttir."
+        #
+        # OLCULDU: bu filtre olmadan takimin FTR'si kendi OTR'sine karsi 100
+        # benzerlik puani aliyor ve "Yuksek oranda birebir metin ortusmesi"
+        # olarak isaretleniyordu. Yani sartnamenin zorunlu tuttugu davranis
+        # intihal sayiliyordu.
+        kendi_rapor_sayisi = 0
+        if report.team_id:
+            kendi_rapor_sayisi = karsilastirma_sorgusu.filter(
+                models.Report.team_id == report.team_id
+            ).count()
+            karsilastirma_sorgusu = karsilastirma_sorgusu.filter(
+                (models.Report.team_id.is_(None))
+                | (models.Report.team_id != report.team_id)
+            )
+        other_reports = karsilastirma_sorgusu.all()
 
         # Kriterler: rapor bir YARISMAYA bagliysa o yarismanin kriterleri
         # (agirliklariyla birlikte) kullaniliyor. Degilse eski kategori
@@ -243,6 +268,19 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
             analysis_data["similarity"] = _benzerligi_isaretle(
                 analysis_data["similarity"], len(other_reports), len(existing_paths), atlanan
             )
+
+        # Neyin karsilastirilmadigi da hakemin bilgisi: "%0 benzerlik" ile
+        # "kendi takiminin raporu haric %0 benzerlik" ayni sey degil.
+        if kendi_rapor_sayisi:
+            analysis_data["similarity"] = {
+                **analysis_data["similarity"],
+                "findings": [
+                    *analysis_data["similarity"]["findings"],
+                    f"Aynı takımın {kendi_rapor_sayisi} raporu karşılaştırma dışı "
+                    "bırakıldı: bir takımın kendi başvurusunun diğer aşaması "
+                    "(Ön Tasarım / Final Tasarım) intihal değildir.",
+                ],
+            }
 
         # Save analysis results
         db_analysis = models.AiAnalysis(

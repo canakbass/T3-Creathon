@@ -305,3 +305,69 @@ def test_ilgisiz_hakem_normal_degerlendirebiliyor(client, sahne):
     )
     r = client.put(f"/api/assignments/{rid}", json={"referee_id": dis_id}, headers=yonetici)
     assert r.status_code == 200, r.text[:200]
+
+
+# --- Kendi kendine intihal --------------------------------------------------
+
+def test_takimin_kendi_raporu_intihal_sayilmiyor(client, sahne):
+    """REGRESYON: takimin kendi onceki raporu %100 intihal olarak isaretleniyordu.
+
+    Sartname madde 5 "BASVURULAR ARASINDA yuksek benzerlik" diyor. Bir
+    takimin iki raporu iki ayri BASVURU degil, ayni basvurunun iki asamasi -
+    ustelik teknik sartname madde 5 ikisini de ZORUNLU kiliyor: "On Tasarim
+    Raporu yarisma katilimi ve Final Tasarim Raporu puanlandirma surecinde
+    kullanilacagi icin IKI RAPORUN DA teslim edilmesi sarttir."
+
+    Yani duzeltmeden once sistem, sartnamenin ZORUNLU tuttugu davranisi
+    intihal olarak isaretliyordu. Demo'da jurinin gorebilecegi en kotu
+    yanlis pozitif buydu.
+    """
+    ayni_icerik = b"%PDF-1.4 ayni proje metni tekrar tekrar ayni proje metni"
+
+    def _yukle(ad, takim, basliklar):
+        r = client.post(
+            "/api/reports/upload",
+            data={"project_name": ad, "competition_id": sahne["yar_id"], "team_id": takim},
+            files={"file": (f"{ad}.pdf", io.BytesIO(ayni_icerik), "application/pdf")},
+            headers=basliklar,
+        )
+        assert r.status_code == 201, r.text[:200]
+        return client.get(f"/api/reports/{r.json()['id']}", headers=sahne["yonetici"]).json()
+
+    _yukle("Glieser OTR", "takim-a", sahne["yonetici"])
+    ftr = _yukle("Glieser FTR", "takim-a", sahne["yonetici"])
+
+    benzerlik = ftr["ai_analysis"]["results"]["similarity"]
+    assert benzerlik["score"] == 0, (
+        f"takimin KENDI raporu intihal sayildi (puan {benzerlik['score']})"
+    )
+    # Sessizce dislamiyoruz: hakem neyin karsilastirilmadigini bilmeli.
+    # "%0 benzerlik" ile "kendi takiminin raporu haric %0" ayni sey degil.
+    assert any(
+        "karşılaştırma dışı" in b for b in benzerlik["findings"]
+    ), benzerlik["findings"]
+
+
+def test_baska_takimin_kopyasi_HALA_yakalaniyor(client, sahne):
+    """Kilit fazla gevsek olmamali: dislama YALNIZCA ayni takim icin."""
+    ayni_icerik = b"%PDF-1.4 ozgun olmayan metin ozgun olmayan metin tekrar"
+
+    def _yukle(ad, takim):
+        r = client.post(
+            "/api/reports/upload",
+            data={"project_name": ad, "competition_id": sahne["yar_id"], "team_id": takim},
+            files={"file": (f"{ad}.pdf", io.BytesIO(ayni_icerik), "application/pdf")},
+            headers=sahne["yonetici"],
+        )
+        assert r.status_code == 201, r.text[:200]
+        return client.get(f"/api/reports/{r.json()['id']}", headers=sahne["yonetici"]).json()
+
+    _yukle("Ozgun Rapor", "takim-a")
+    kopya = _yukle("Kopya Rapor", "takim-b")
+    # Sahte PDF baytlariyla metin cikarilamadigi icin puanin kendisi
+    # guvenilir degil; kritik olan AYNI TAKIM dislamasinin buraya
+    # SIZMAMASI - yani karsilastirma kumesinin bos kalmamasi.
+    benzerlik = kopya["ai_analysis"]["results"]["similarity"]
+    assert not any(
+        "karşılaştırma dışı" in b for b in benzerlik["findings"]
+    ), f"baska takimin raporu da dislandi: {benzerlik['findings']}"
