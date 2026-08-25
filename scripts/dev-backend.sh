@@ -35,17 +35,61 @@ durdur() {
   fi
 }
 
+# Port'u DINLEYEN surecin pid'i (yoksa bos ciktı).
+#
+# NEDEN GEREKLI: "port bos mu" sorusunu curl ile sormak yaniltici. Porttaki
+# yabanci bir surec de curl'e 200 doner; betik onu kendi sunucumuz sanar.
+# `|| true`: port BOSSA grep hicbir sey bulmaz ve 1 doner; `set -e` +
+# `pipefail` altinda bu, betigi sessizce sonlandirirdi (hicbir cikti
+# vermeden "exit 1"). Bos sonuc burada bir hata degil, beklenen cevap.
+port_sahibi() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -lptnH "sport = :$1" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2 || true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1 || true
+  fi
+}
+
 baslat() {
   if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     echo "zaten calisiyor (pid $(cat "$PIDFILE"))"
     return 0
   fi
+
+  # BASLAMADAN ONCE portu kontrol et. Yoksa yeni uvicorn "address already
+  # in use" ile olur, ama porttaki ESKI surec isteklere cevap vermeye devam
+  # ettigi icin her sey calisiyormus gibi gorunur - degistirdiginiz kodun
+  # neden etki etmedigini saatlerce arayabilirsiniz.
+  SAHIP="$(port_sahibi "$PORT")"
+  if [[ -n "$SAHIP" ]]; then
+    echo "port $PORT zaten kullaniliyor (pid $SAHIP) - bu betigin baslattigi"
+    echo "bir surec DEGIL (pid dosyasi yok ya da eskimis)."
+    echo "Kapatmak icin:  kill $SAHIP"
+    return 1
+  fi
+
   cd "$KOK/backend"
   nohup "$KOK/.venv/bin/python" -m uvicorn main:app --port "$PORT" > "$LOGFILE" 2>&1 &
-  echo $! > "$PIDFILE"
+  YENI_PID=$!
+  echo "$YENI_PID" > "$PIDFILE"
   for _ in $(seq 1 60); do
+    # SIRALAMA ONEMLI: once "surecimiz yasiyor mu", sonra "port cevap
+    # veriyor mu".
+    #
+    # NEDEN: yalnizca curl'e bakan onceki hali YANLIS "hazir" veriyordu.
+    # Porta baglanamayan uvicorn ("address already in use") hemen olur,
+    # ama porttaki ESKI surec curl'e 200 dondurmeye devam eder. Betik
+    # "hazir" der, oysa calisan sey yeni kod degil eski surectir - ustelik
+    # veri tabani dosyasi silinmisse o eski surec artik var olmayan bir
+    # inode'a yazmaya calisip her istege "disk I/O error" verir.
+    if ! kill -0 "$YENI_PID" 2>/dev/null; then
+      echo "sunucu basladiktan hemen sonra oldu. log:"
+      tail -20 "$LOGFILE"
+      rm -f "$PIDFILE"
+      return 1
+    fi
     if curl -s -o /dev/null "http://127.0.0.1:$PORT/"; then
-      echo "hazir: http://127.0.0.1:$PORT (pid $(cat "$PIDFILE"))"
+      echo "hazir: http://127.0.0.1:$PORT (pid $YENI_PID)"
       return 0
     fi
     sleep 0.5

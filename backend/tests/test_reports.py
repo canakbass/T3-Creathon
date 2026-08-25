@@ -23,6 +23,26 @@ def _kaydol_ve_giris(client, email, rol):
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
+def _ata(client, yonetici_headers, report_id, hakem_email):
+    """Raporu bir hakeme atar ve atamayi dogrular.
+
+    NEDEN GEREKLI: hakem artik yalnizca KENDISINE ATANMIS raporlari
+    gorebiliyor. Onceden atamasi olmayan raporlar da hakeme gosteriliyordu
+    ve bu testler o gevsemeye dayaniyordu; gercek akista dagitimi her zaman
+    yarisma yoneticisi yapar.
+    """
+    hakemler = client.get("/api/assignments/referees", headers=yonetici_headers)
+    assert hakemler.status_code == 200, hakemler.text[:200]
+    hakem_id = next(h["id"] for h in hakemler.json() if h["email"] == hakem_email)
+    r = client.put(
+        f"/api/assignments/{report_id}",
+        json={"referee_id": hakem_id},
+        headers=yonetici_headers,
+    )
+    assert r.status_code == 200, f"atama basarisiz: {r.text[:200]}"
+    return hakem_id
+
+
 def test_report_lifecycle(client):
     # 1. Register users (competitor & referee)
     client.post(
@@ -83,6 +103,10 @@ def test_report_lifecycle(client):
     
     # The HTTP response of the upload endpoint returns immediately with "pending"
     assert report_data["status"] == "pending"
+
+    # 3b. Manager assigns the report to the referee (required before the
+    # referee can see or decide anything - see _ata).
+    _ata(client, {"Authorization": f"Bearer {manager_token}"}, report_id, "ref@test.org")
 
     # 4. Get report details as referee
     detail_res = client.get(
@@ -148,6 +172,7 @@ def test_report_list_serializes_analysis(client):
     )
     assert upload.status_code == 201
     report_id = upload.json()["id"]
+    _ata(client, manager, report_id, "liste_referee@test.org")
 
     # Analizin gerceklestigini teyit et - yoksa test bosa doner ve
     # regresyonu kacirir (analiz yoksa endpoint zaten hic patlamiyordu).
@@ -206,6 +231,7 @@ def test_real_pdf_produces_real_ai_scores(client):
         )
     assert upload.status_code == 201
     report_id = upload.json()["id"]
+    _ata(client, manager, report_id, "gercek_referee@test.org")
 
     detay = client.get(f"/api/reports/{report_id}", headers=referee).json()
     assert detay["status"] == "analyzed"
@@ -240,6 +266,7 @@ def test_real_pdf_produces_real_ai_scores(client):
             headers=manager,
         )
     assert kopya.status_code == 201
+    _ata(client, manager, kopya.json()["id"], "gercek_referee@test.org")
     kopya_analiz = client.get(
         f"/api/reports/{kopya.json()['id']}", headers=referee
     ).json()["ai_analysis"]

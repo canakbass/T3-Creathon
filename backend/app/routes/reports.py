@@ -345,32 +345,100 @@ async def upload_report(
     return db_report
 
 
+def _rol_yoksa_reddet(user: models.User) -> str:
+    """Aktif rolu dondurur; secilmemisse istegi reddeder.
+
+    NEDEN VAR: rol bazli filtreler `if rol == ...` zincirleriydi ve rolu
+    olmayan token hicbir dala girmiyordu - yani filtre SESSIZCE devre disi
+    kaliyordu. Cok-rollu bir kullanici giris yapip henuz rol secmemisken
+    /api/reports tum yarismacilarin raporlarini donduruyordu. Eksik rol
+    artik "filtre yok" degil, "erisim yok" anlamina geliyor.
+    """
+    aktif = getattr(user, "active_role", None)
+    if aktif is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Rol secilmedi. /api/auth/select-role ile rolunuzu secin.",
+        )
+    return aktif
+
+
+def _rapora_erisebilir_mi(report: models.Report, user: models.User) -> bool:
+    """Bu kullanici bu rapora erisebilir mi.
+
+    - Yarisma/Degerlendirme Yoneticisi: hepsi
+    - Yarismaci: yalnizca kendi raporu
+    - Hakem: yalnizca kendisine ATANMIS rapor
+    - Rol secilmemis: hicbiri
+
+    TEK YETKI KAPISI: rapora dokunan her uc nokta (detay, dosya, gerekce
+    taslagi, karar) bunu cagirmali. Listeleme icin ayni kurallarin SQL
+    karsiligi _erisim_filtresi'nde - ikisi birlikte degismeli.
+    """
+    aktif = getattr(user, "active_role", None)
+    if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
+        return True
+    if aktif == "COMPETITOR":
+        return report.submitted_by_id == user.id
+    if aktif == "REFEREE":
+        return report.assignment is not None and report.assignment.referee_id == user.id
+    return False
+
+
+def _erisim_filtresi(query, user: models.User):
+    """_rapora_erisebilir_mi kurallarinin sorgu karsiligi.
+
+    Ikisi ayni kurallari anlatmak ZORUNDA: liste bir raporu gosterip
+    detayi 403 verirse arayuz tutarsiz gorunur, tersi durumda ise liste
+    gormemesi gereken raporu sizdirir.
+    """
+    aktif = _rol_yoksa_reddet(user)
+    if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
+        return query
+    if aktif == "COMPETITOR":
+        return query.filter(models.Report.submitted_by_id == user.id)
+    if aktif == "REFEREE":
+        # Ic birlesim (join): atamasi olmayan rapor hakemin listesine
+        # DUSMEZ. Dagitimi yarisma yoneticisi yapar.
+        return query.join(models.Assignment).filter(
+            models.Assignment.referee_id == user.id
+        )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"'{aktif}' rolu rapor listeleyemez.",
+    )
+
+
+def _rapor_getir_yetkiliyse(report_id: str, user: models.User, db: Session) -> models.Report:
+    """Raporu bulur ve yetki kapisindan gecirir.
+
+    Bulunamayan ve yetkisiz durum AYNI 404'u dondurmuyor: yetkisiz erisimde
+    403 veriyoruz cunku rapor kimliklerinin (RPT-2026-xxxx) tahmin edilmesi
+    zaten kolay, gizlemenin bir degeri yok; net hata mesaji ise hakemin
+    "neden goremiyorum" sorusunu cevapliyor.
+    """
+    report = db.query(models.Report).filter(models.Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    _rol_yoksa_reddet(user)
+    if not _rapora_erisebilir_mi(report, user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu rapora erisim yetkiniz yok.",
+        )
+    return report
+
+
 @router.get("", response_model=List[schemas.ReportResponse])
 def list_reports(
     status: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    query = db.query(models.Report)
-
-    # Rol bazli filtreleme, isteğin AKTIF ROLUNE gore yapiliyor.
+    # Rol bazli filtreleme, istegin AKTIF ROLUNE gore yapiliyor.
     # Cok-rollu bir kullanici hakem rolundeyken yarismaci raporlarini
     # gormemeli; hangi rolle hareket ettigi belirleyici.
-    aktif_rol = getattr(current_user, "active_role", None)
-    if aktif_rol == "COMPETITOR":
-        query = query.filter(models.Report.submitted_by_id == current_user.id)
-    elif aktif_rol == "REFEREE":
-        # Hakem yalnizca KENDISINE ATANMIS raporlari gorur.
-        #
-        # Gecis notu: atamasi HIC OLMAYAN raporlar da gosteriliyor. Sebep,
-        # atama sistemi yeni eklendi ve daha once yuklenmis raporlarin
-        # atamasi yok; bunlari gizlemek eski verinin kaybolmasi gibi
-        # gorunurdu. Yarisma akisi tam oturunca (her rapor bir yarismaya
-        # bagli ve dagitim yapiliyor) bu gevsetme kaldirilabilir.
-        query = query.outerjoin(models.Assignment).filter(
-            (models.Assignment.referee_id == current_user.id)
-            | (models.Assignment.id.is_(None))
-        )
+    query = _erisim_filtresi(db.query(models.Report), current_user)
 
     if status:
         query = query.filter(models.Report.status == status)
@@ -387,40 +455,14 @@ def get_report(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    report = db.query(models.Report).filter(models.Report.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found.")
-        
-    # Yarismaci yalnizca KENDI raporunu gorebilir.
-    if (
-        getattr(current_user, "active_role", None) == "COMPETITOR"
-        and report.submitted_by_id != current_user.id
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bu rapora erisim yetkiniz yok.",
-        )
-        
+    # Detay, dosyanin kendisiyle AYNI yetki kapisindan geciyor. Onceden
+    # yalnizca yarismaci kontrol ediliyordu: atanmamis bir hakem baska bir
+    # yarismacinin tam AI analizini (puan, gerekce, benzerlik) okuyabiliyordu.
+    report = _rapor_getir_yetkiliyse(report_id, current_user, db)
+
     # ai_analysis.results semada zorunlu ama veri tabaninda kolon degil -
     # yanit oncesi duz kolonlardan uretiliyor (bkz. _attach_analysis_results).
     return _attach_analysis_results(report)
-
-
-def _rapora_erisebilir_mi(report: models.Report, user: models.User) -> bool:
-    """Bu kullanici bu raporun DOSYASINI gorebilir mi.
-
-    - Yarismaci: yalnizca kendi raporu
-    - Hakem: yalnizca kendisine ATANMIS rapor (atama yoksa goremez)
-    - Yarisma/Degerlendirme Yoneticisi: hepsi
-    """
-    aktif = getattr(user, "active_role", None)
-    if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
-        return True
-    if aktif == "COMPETITOR":
-        return report.submitted_by_id == user.id
-    if aktif == "REFEREE":
-        return report.assignment is not None and report.assignment.referee_id == user.id
-    return False
 
 
 @router.get("/{report_id}/file")
@@ -603,11 +645,12 @@ def submit_decision(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.RoleChecker(["REFEREE"]))
 ):
-    # Verify report exists
-    report = db.query(models.Report).filter(models.Report.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found.")
-        
+    # ATAMA KONTROLU. Onceden yalnizca "hakem mi" diye bakiliyordu: sistemdeki
+    # HERHANGI bir hakem, kendisine atanmamis bir raporu -hatta okuma yetkisi
+    # olmadigi icin hic acamadigi bir raporu- onaylayip reddedebiliyordu.
+    # Karar, sistemin geri alinamayan tek eylemi; en dar kapi burada olmali.
+    report = _rapor_getir_yetkiliyse(report_id, current_user, db)
+
     # Ensure it's analyzed first
     if report.status == "pending":
         raise HTTPException(
@@ -640,13 +683,15 @@ def submit_decision(
         submitted_at=datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     )
     
-    # Update report status
-    report.status = decision_in.outcome # approve, reject, revise -> maps to status
-    if decision_in.outcome == "approve":
-        report.status = "approved"
-    elif decision_in.outcome == "reject":
-        report.status = "rejected"
-        
+    # Karar -> rapor durumu. Acik harita: onceden `report.status` once
+    # ham `outcome` ile yaziliyor, sonra iki dal ile duzeltiliyordu; ucuncu
+    # deger (revise) tesadufen dogru calisiyordu. Arayuzun tanidigi degerler
+    # frontend/src/lib/mock-reports.ts:REPORT_STATUSES ile ayni olmali.
+    report.status = {"approve": "approved", "reject": "rejected", "revise": "revise"}[
+        decision_in.outcome
+    ]
+
+
     db.add(db_decision)
     db.commit()
     db.refresh(db_decision)

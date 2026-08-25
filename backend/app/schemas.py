@@ -1,5 +1,5 @@
-from pydantic import BaseModel, EmailStr
-from typing import List, Optional, Dict
+from pydantic import BaseModel, EmailStr, Field
+from typing import List, Literal, Optional, Dict
 from datetime import datetime
 
 # --- Token Schemas ---
@@ -203,9 +203,16 @@ class RationaleDraft(BaseModel):
     suggested_outcome: str
 
 class FinalDecisionCreate(BaseModel):
-    outcome: str # approve, reject, revise
-    final_score: int
-    rationale: str
+    # NEDEN Literal: bu deger dogrudan Report.status'a yaziliyordu. Serbest
+    # metin oldugu icin {"outcome": "SACMA"} gonderen bir istek raporun
+    # durumunu "SACMA" yapiyor, rapor da hicbir arayuz filtresine
+    # dusmedigi icin ortadan kayboluyordu.
+    outcome: Literal["approve", "reject", "revise"]
+    # Puan 0-100 arasi; arayuz de bu araligi gosteriyor.
+    final_score: int = Field(ge=0, le=100)
+    # Gerekce zorunlu: hakem karari yazili dayanak olmadan kaydedilmemeli.
+    # Ust sinir, veri tabanina sinirsiz metin yazilmasini engelliyor.
+    rationale: str = Field(min_length=20, max_length=10000)
     # Denetim izi: gerekce AI taslagindan mi geldi, hakem degistirdi mi.
     # Arayuz taslak dugmesini kullandiysa bunlari gonderir.
     rationale_ai_drafted: bool = False
