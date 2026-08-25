@@ -394,3 +394,106 @@ def test_hic_rapor_yokken_kurallar_serbestce_degisir(kurulum, client):
             headers=ynt,
         )
         assert r.status_code == 200, r.text[:200]
+
+
+# --- Sablon dosyasindan otomatik doldurma ---------------------------------
+
+from pathlib import Path as _Path
+
+ORNEKLER = _Path(__file__).resolve().parents[2] / "ai-doc-analysis" / "sample_reports"
+OTR_SABLONU = ORNEKLER / "havacilikta_yz_ktr" / "sablon_OTR_2026.docx"
+
+
+@pytest.mark.skipif(not OTR_SABLONU.exists(), reason="resmi OTR sablonu bulunamadi")
+def test_resmi_sablondan_baslik_ve_agirlik_cikariliyor(kurulum, client):
+    """Yonetici resmi sablonu yukluyor, form kendiliginden doluyor.
+
+    NEDEN: "Kriter ve Sablon Tanimi" ekraninda zorunlu basliklar ve kriter
+    agirliklari TEK TEK elle giriliyordu. TEKNOFEST'in resmi sablon dosyalari
+    bu bilgiyi zaten makine-okunur bicimde tasiyor (Word baslik stilleri +
+    "(N Puan)" ekleri) ve agirliklari tam 100'e topluyor.
+    """
+    with open(OTR_SABLONU, "rb") as f:
+        r = client.post(
+            f"/api/competitions/{kurulum['yar_id']}/template/extract",
+            files={"file": (OTR_SABLONU.name, f, "application/octet-stream")},
+            headers=kurulum["yonetici"],
+        )
+    assert r.status_code == 200, r.text[:300]
+    d = r.json()
+
+    assert d["weight_total"] == 100, d
+    assert len(d["required_headings"]) == 8, d["required_headings"]
+    assert "ALGORİTMALAR VE SİSTEM MİMARİSİ" in d["required_headings"]
+    # Belge susleri bolum sayilmamali
+    assert not any("LİSTESİ" in b for b in d["required_headings"]), d["required_headings"]
+    assert d["warnings"] == [], d["warnings"]
+
+    # Cikarilan sonuc DOGRUDAN kaydedilebilir olmali - aksi halde "otomatik
+    # doldurma" yalnizca gosterislik olurdu.
+    kaydet = client.put(
+        f"/api/competitions/{kurulum['yar_id']}/criteria",
+        json={"criteria": [{"title": k["title"], "weight": k["weight"]} for k in d["criteria"]]},
+        headers=kurulum["yonetici"],
+    )
+    assert kaydet.status_code == 200, kaydet.text[:300]
+    assert sum(k["weight"] for k in kaydet.json()["criteria"]) == 100
+
+
+def test_desteklenmeyen_sablon_turu_reddediliyor(kurulum, client):
+    r = client.post(
+        f"/api/competitions/{kurulum['yar_id']}/template/extract",
+        files={"file": ("notlar.txt", io.BytesIO(b"merhaba"), "text/plain")},
+        headers=kurulum["yonetici"],
+    )
+    assert r.status_code == 400
+    assert ".docx" in r.json()["detail"]
+
+
+def test_sablon_cikarimi_HICBIR_SEY_kaydetmiyor(kurulum, client):
+    """Cikarim bir ONERI; son soz yoneticide.
+
+    Cikarim heuristik (alt basliklar ana basliklarla ayni Word stilini
+    kullanabiliyor). Otomatik kaydetmek, yanlis bir baslik listesini
+    yoneticinin haberi olmadan yarismanin kurallari haline getirirdi -
+    ustelik sistemin "AI karar vermez" ilkesine de aykiri olurdu.
+    """
+    onceki = client.get(
+        f"/api/competitions/{kurulum['yar_id']}", headers=kurulum["yonetici"]
+    ).json()
+    with open(OTR_SABLONU, "rb") as f:
+        client.post(
+            f"/api/competitions/{kurulum['yar_id']}/template/extract",
+            files={"file": (OTR_SABLONU.name, f, "application/octet-stream")},
+            headers=kurulum["yonetici"],
+        )
+    sonraki = client.get(
+        f"/api/competitions/{kurulum['yar_id']}", headers=kurulum["yonetici"]
+    ).json()
+    assert sonraki["required_headings"] == onceki["required_headings"]
+    assert sonraki["criteria"] == onceki["criteria"]
+
+
+def test_rapor_turu_sablonla_birlikte_kaydediliyor(kurulum, client):
+    """REGRESYON: "Sablon adi" alani doldurulup HICBIR YERE kaydedilmiyordu.
+
+    Alan artik gercek karsiligina bagli: RAPOR TURU. Bir TEKNOFEST
+    yarismasinin tek sablonu yok - On Tasarim ve Final Tasarim raporlarinin
+    basliklari da puan agirliklari da farkli.
+    """
+    r = client.put(
+        f"/api/competitions/{kurulum['yar_id']}/template",
+        json={
+            "report_type_name": "Ön Tasarım Raporu",
+            "required_headings": ["Özgünlük"],
+            "min_pages": 1,
+            "max_pages": 80,
+        },
+        headers=kurulum["yonetici"],
+    )
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["report_type_name"] == "Ön Tasarım Raporu"
+    tekrar = client.get(
+        f"/api/competitions/{kurulum['yar_id']}", headers=kurulum["yonetici"]
+    ).json()
+    assert tekrar["report_type_name"] == "Ön Tasarım Raporu"

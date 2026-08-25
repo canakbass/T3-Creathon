@@ -82,6 +82,27 @@ class CriterionResponse(BaseModel):
     weight: int
     display_order: int
 
+class ExtractedCriterion(BaseModel):
+    title: str
+    weight: Optional[int] = None
+
+
+class TemplateExtractResult(BaseModel):
+    """POST /api/competitions/{id}/template/extract yaniti.
+
+    Bu bir ONERI; hicbir sey kaydedilmiyor. Yonetici listeyi duzenleyip
+    normal /template ve /criteria uc noktalariyla kaydediyor.
+    """
+    required_headings: List[str]
+    criteria: List[ExtractedCriterion]
+    # Cikarilan agirliklarin toplami. 100 degilse `warnings` sebebini soyluyor.
+    weight_total: Optional[int] = None
+    # Hangi sinyalden cikarildi ("docx:Balk1", "pdf:(stilsiz)"...). Yonetici
+    # sonuca guvenip guvenmeyecegine karar verebilsin diye aciga cikariyoruz.
+    source: Optional[str] = None
+    warnings: List[str] = []
+
+
 class CompetitionStatusUpdate(BaseModel):
     status: str
 

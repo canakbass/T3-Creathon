@@ -22,14 +22,26 @@ YARISMA ASAMALARI ve ne yapilabildigi:
 """
 
 import json
+import os
+import shutil
+import tempfile
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from .. import models, schemas, auth
+from ..services import ai
 
 router = APIRouter(prefix="/api/competitions", tags=["Competitions"])
 
@@ -310,6 +322,69 @@ def set_criteria(
         _yeniden_analiz_kuyrukla(db, background_tasks, yeniden)
     db.refresh(y)
     return _yanit(y)
+
+
+# Yonetici sablon dosyasi yukleyip formu otomatik doldurabilsin diye kabul
+# edilen turler. .doc (eski ikili bicim) OKUNMUYOR - cikaricinin kendisi bunu
+# net bir mesajla soyluyor, sessizce bos donmuyor.
+_SABLON_UZANTILARI = (".docx", ".pdf")
+
+
+@router.post("/{competition_id}/template/extract", response_model=schemas.TemplateExtractResult)
+async def extract_template(
+    competition_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(_YONETICI),
+):
+    """Resmi rapor sablonundan zorunlu basliklari ve kriter agirliklarini cikarir.
+
+    KAYDETMIYOR - yalnizca oneri doner. Yonetici listeyi gorup duzenledikten
+    sonra normal /template ve /criteria uc noktalariyla kaydediyor.
+
+    NEDEN OTOMATIK KAYDETMIYORUZ: cikarim heuristik. TEKNOFEST sablonlarinda
+    alt basliklar ana basliklarla AYNI Word stilini kullanabiliyor ve naif
+    toplama 130 verebiliyor (olculdu: sablon_OTR_2026.docx). Cikarici bunu
+    duzeltiyor ama her sablon icin garanti edemez; son soz yoneticide olmali.
+    Ayrica bu, sistemin "AI karar vermez, insan karar verir" ilkesiyle de
+    tutarli.
+    """
+    y = db.query(models.Competition).filter(models.Competition.id == competition_id).first()
+    if not y:
+        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+
+    uzanti = os.path.splitext(file.filename or "")[1].lower()
+    if uzanti not in _SABLON_UZANTILARI:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Desteklenmeyen dosya turu ({uzanti or 'bilinmiyor'}). "
+                "Resmi sablonu .docx ya da .pdf olarak yukleyin."
+            ),
+        )
+
+    # Gecici dosyaya yaziyoruz: cikarici bir YOL istiyor (zipfile/pdfplumber
+    # ikisi de dosya yolu ile calisiyor) ve bu dosyanin saklanmasina gerek yok.
+    with tempfile.NamedTemporaryFile(suffix=uzanti, delete=False) as gecici:
+        shutil.copyfileobj(file.file, gecici)
+        gecici_yol = gecici.name
+    try:
+        sonuc = ai.extract_template(gecici_yol)
+    finally:
+        try:
+            os.remove(gecici_yol)
+        except OSError:
+            pass
+
+    return {
+        "required_headings": sonuc["basliklar"],
+        "criteria": [
+            {"title": k["baslik"], "weight": k["agirlik"]} for k in sonuc["kriterler"]
+        ],
+        "weight_total": sonuc["agirlik_toplami"],
+        "source": sonuc["kaynak"],
+        "warnings": sonuc["uyarilar"],
+    }
 
 
 @router.put("/{competition_id}/status", response_model=schemas.CompetitionResponse)

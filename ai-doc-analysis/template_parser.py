@@ -85,6 +85,21 @@ _STIL_SEVIYE = re.compile(r"(?:heading|ba[sş]l[iı]?k|balk)\s*([1-9])", re.IGNO
 _GOVDE_SEVIYESI = 9
 
 
+# --- Govde metninden cikarilabilen EK kurallar -------------------------------
+# Iki gercek sablon dosyasi da sayfa sinirini duz metin olarak yaziyor:
+#   OTR: "Toplam sayfa sayisi en az 6 sayfa en fazla 15 sayfa olmalidir."
+#   PDR: "rapor 10 sayfayi gecmemelidir."
+_ARALIK = re.compile(r"en\s*az\s*(\d{1,3})\s*sayfa.{0,30}?en\s*(?:fazla|çok)\s*(\d{1,3})\s*sayfa", re.IGNORECASE | re.DOTALL)
+_EN_AZ = re.compile(r"en\s*az\s*(\d{1,3})\s*sayfa", re.IGNORECASE)
+_EN_FAZLA = re.compile(r"en\s*(?:fazla|çok)\s*(\d{1,3})\s*sayfa", re.IGNORECASE)
+_GECMEMELI = re.compile(r"(\d{1,3})\s*sayfa(?:y[ıi])?\s*(?:ge[çc]me|a[şs]ma)", re.IGNORECASE)
+# "HAVACILIKTA YAPAY ZEKA YARISMASI ON TASARIM RAPORU" -> "On Tasarim Raporu"
+_RAPOR_TURU = re.compile(r"([A-ZÇĞİÖŞÜ][A-ZÇĞİÖŞÜ ]{2,40}RAPORU)")
+# K1: TEKNOFEST'te "kategori" = KATILIMCI SEVIYESI. Sablon dosyasi bunu
+# kapak sayfasinda yaziyor ("Yarisma Egitim Seviyesi: Universite ve Uzeri").
+_SEVIYE = re.compile(r"(?:Yarışma\s*)?E[ğg]itim\s*Seviyesi\s*[:：]\s*([^\n]{3,60})", re.IGNORECASE)
+
+
 class SablonOkunamadi(Exception):
     """Dosya sablon olarak ayristirilamadi (bozuk, sifreli ya da eski .doc)."""
 
@@ -135,6 +150,19 @@ def _stil_seviyesi(sid: Optional[str], harita: dict, derinlik: int = 0) -> Optio
     return _stil_seviyesi(dayanak, harita, derinlik + 1)
 
 
+def _kapsayici_mi(p: ET.Element) -> bool:
+    """Icinde BASKA paragraf barindiran paragraf mi.
+
+    Kapak sayfasi metin kutusu/tablo icinde kuruldugunda Word ic ice <w:p>
+    uretiyor ve ET.iter() once DIS paragrafi veriyor - onun metni tum ic
+    paragraflarin BIRLESIMI oluyor ("... RAPORUGOREV: ... Takim Adi:").
+    Bu birlesik dev satir hem sahte baslik uretiyor hem de duz metin
+    kurallarini (sayfa siniri, egitim seviyesi) yanlis kirpiyor. Kapsayici
+    paragraflar atlanip yalnizca ic paragraflar okunuyor.
+    """
+    return p.find(".//" + W + "p") is not None
+
+
 def _paragraf_metni(p: ET.Element) -> str:
     parcalar = []
     for dugum in p.iter():
@@ -168,6 +196,19 @@ def _tf_kucult(s: str) -> str:
     return s.replace("İ", "i").replace("I", "ı").lower()
 
 
+def _tr_baslik_yap(s: str) -> str:
+    """Turkce'ye uygun baslik bicimi.
+
+    Python'un str.title()'i Turkce bilmiyor: "ON TASARIM RAPORU".title()
+    "On Tasarim Raporu" veriyor - 'I' harfi 'i'ye donuyor, 'ı' olmasi
+    gerekirken. Once Turkce kucultup sonra ilk harfleri buyutuyoruz.
+    """
+    kelimeler = []
+    for k in _tf_kucult(s).split():
+        kelimeler.append((k[0].replace("i", "İ").upper() + k[1:]) if k else k)
+    return " ".join(kelimeler)
+
+
 # ------------------------------------------------------------------- docx
 
 
@@ -182,9 +223,19 @@ def _docx_basliklari(yol: str) -> list:
         ) from exc
     with z:
         try:
-            govde = z.read("word/document.xml")
+            bilgi = z.getinfo("word/document.xml")
         except KeyError as exc:
             raise SablonOkunamadi("Dosyada word/document.xml yok.") from exc
+        # ZIP BOMBASI KORUMASI: .docx bir zip arsivi. Kucuk bir dosya
+        # acildiginda gigabaytlarca XML'e donusebilir ve sunucunun bellegini
+        # tuketir. Gercek sablonlarda document.xml 68-147 KB; 64 MB fazlasiyla
+        # genis bir sinir ama bombayi durduruyor.
+        if bilgi.file_size > 64 * 1024 * 1024:
+            raise SablonOkunamadi(
+                "Sablon icerigi olagandisi buyuk (>64 MB); dosya bozuk ya da "
+                "zararli olabilir."
+            )
+        govde = z.read("word/document.xml")
         harita = _stil_haritasi(z)
         try:
             kok = ET.fromstring(govde)
@@ -192,7 +243,11 @@ def _docx_basliklari(yol: str) -> list:
             raise SablonOkunamadi(f"word/document.xml ayristirilamadi: {exc}") from exc
 
     cikti = []
+    tum_metin = []
     for p in kok.iter(W + "p"):
+        if _kapsayici_mi(p):
+            continue
+        tum_metin.append(_paragraf_metni(p))
         ppr = p.find(W + "pPr")
         sid = None
         dogrudan = None
@@ -216,7 +271,7 @@ def _docx_basliklari(yol: str) -> list:
         if not metin:
             continue
         cikti.append((seviye, ilvl, metin))
-    return cikti
+    return cikti, "\n".join(t for t in tum_metin if t)
 
 
 # -------------------------------------------------------------------- pdf
@@ -256,8 +311,9 @@ def _pdf_basliklari(yol: str) -> list:
                 punto = max(round(c["size"], 1) for c in chars)
                 satirlar.append((metin, punto))
 
+    tum_metin = "\n".join(m for m, _ in satirlar)
     if not satirlar:
-        return []
+        return [], ""
     sayac = {}
     for _, punto in satirlar:
         sayac[punto] = sayac.get(punto, 0) + 1
@@ -275,7 +331,7 @@ def _pdf_basliklari(yol: str) -> list:
         if derinlik == 0 and _agirlik(metin) is None:
             continue
         cikti.append((int(punto * 10), derinlik, metin))
-    return cikti
+    return cikti, tum_metin
 
 
 # ------------------------------------------------------------------ secim
@@ -328,10 +384,10 @@ def sablondan_cikar(yol: str) -> dict:
     uzanti = Path(yol).suffix.lower()
     if uzanti == ".docx":
         bicim = "docx"
-        basliklar = _docx_basliklari(yol)
+        basliklar, govde = _docx_basliklari(yol)
     elif uzanti == ".pdf":
         bicim = "pdf"
-        basliklar = _pdf_basliklari(yol)
+        basliklar, govde = _pdf_basliklari(yol)
     elif uzanti == ".doc":
         raise SablonOkunamadi(
             "Eski Word bicimi (.doc) okunamiyor. Word'de acip "
@@ -436,6 +492,8 @@ def sablondan_cikar(yol: str) -> dict:
                     "yanlis calisabilir, birini yeniden adlandirin."
                 )
 
+    ek = _govde_kurallari(govde, uyarilar)
+
     return {
         "bicim": bicim,
         "guven": guven,
@@ -445,4 +503,66 @@ def sablondan_cikar(yol: str) -> dict:
         "alt_basliklar": alt,
         "uyarilar": uyarilar,
         "_secilen_grup": secilen,
+        **ek,
     }
+
+
+def _govde_kurallari(govde: str, uyarilar: list) -> dict:
+    """Sablonun GOVDE METNINDEN cikarilabilen ek alanlar.
+
+    Iki gercek sablon dosyasinda da bu bilgiler duz cumle olarak yaziyor;
+    basliklardan degil metinden geliyorlar, bu yuzden guven seviyesi ayri
+    dusunulmeli - hepsi yoneticiye ONERI olarak sunuluyor.
+    """
+    sonuc = {
+        "min_sayfa": None,
+        "max_sayfa": None,
+        "rapor_turu_adi": None,
+        "seviye": None,
+    }
+    if not govde:
+        return sonuc
+
+    aralik = _ARALIK.search(govde)
+    if aralik:
+        sonuc["min_sayfa"] = int(aralik.group(1))
+        sonuc["max_sayfa"] = int(aralik.group(2))
+    else:
+        az = _EN_AZ.search(govde)
+        fazla = _EN_FAZLA.search(govde)
+        if az:
+            sonuc["min_sayfa"] = int(az.group(1))
+        if fazla:
+            sonuc["max_sayfa"] = int(fazla.group(1))
+
+    # "10 sayfayi gecmemelidir" ayri bir sinir; ustteki araliktan FARKLIYSA
+    # yoneticiye soyluyoruz - OTR sablonunda ikisi gercekten cakisiyor
+    # ("Rapor 10 sayfayi gecmemelidir" ama "toplam en az 6 en fazla 15"),
+    # cunku biri kapak/icindekiler HARIC sayiyor. Analyzer TOPLAM sayfayi
+    # saydigi icin genis olani dogru olan; yine de karar yoneticinin.
+    gec = _GECMEMELI.search(govde)
+    if gec:
+        deger = int(gec.group(1))
+        if sonuc["max_sayfa"] is None:
+            sonuc["max_sayfa"] = deger
+        elif deger != sonuc["max_sayfa"]:
+            uyarilar.append(
+                f"Sablonda iki farkli sayfa siniri geciyor: '{deger} sayfayi "
+                f"gecmemelidir' ve 'en fazla {sonuc['max_sayfa']} sayfa'. "
+                "Genellikle biri kapak/icindekiler HARIC sayiyor; analiz "
+                "TOPLAM sayfayi saydigi icin genis olani onerildi."
+            )
+
+    tur = _RAPOR_TURU.findall(govde[:3000])
+    if tur:
+        # En kisa eslesme genelde en temizi: "ON TASARIM RAPORU" gibi.
+        ad = min(tur, key=len).strip()
+        # "YARISMASI ON TASARIM RAPORU" -> "ON TASARIM RAPORU"
+        ad = re.sub(r"^.*?YARIŞMASI\s+", "", ad).strip()
+        sonuc["rapor_turu_adi"] = _tr_baslik_yap(ad)
+
+    sev = _SEVIYE.search(govde)
+    if sev:
+        sonuc["seviye"] = sev.group(1).strip(" .:-")
+
+    return sonuc

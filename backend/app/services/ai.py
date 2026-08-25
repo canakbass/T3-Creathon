@@ -17,6 +17,7 @@ for _modul_yolu in (_REPO_KOKU / "ai-doc-analysis", _REPO_KOKU / "ai-scoring"):
         sys.path.insert(0, str(_modul_yolu))
 
 from analyzer import analyze_document_for_ui as _hasan_analyze_document  # noqa: E402
+from template_extract import sablondan_cikar as _sablondan_cikar  # noqa: E402
 from scorer import (  # noqa: E402
     analyze_category_fit_for_ui as _hayrettin_category,
     check_similarity_for_ui as _hayrettin_similarity,
@@ -40,6 +41,20 @@ def analyze_document(file_path: str) -> Dict[str, Any]:
     analyzer kendi varsayilanini kullanir.
     """
     return _hasan_analyze_document(file_path)
+
+
+def extract_template(file_path: str) -> Dict[str, Any]:
+    """Resmi rapor sablonundan zorunlu basliklari ve puan agirliklarini cikarir.
+
+    ai-doc-analysis/template_extract.py -> sablondan_cikar().
+    Yonetici "Kriter ve Sablon Tanimi" ekranini elle doldurmak yerine resmi
+    sablon dosyasini yukluyor; TEKNOFEST sablonlari bu bilgiyi Word baslik
+    stillerinde ve "(N Puan)" bicimindeki eklerde zaten tasiyor.
+
+    ASLA istisna firlatmaz: bozuk/desteklenmeyen dosyada bos listeler ve
+    dolu `uyarilar` doner - yonetici neyin neden cikarilamadigini gormeli.
+    """
+    return _sablondan_cikar(file_path)
 
 
 def evaluate_criteria(

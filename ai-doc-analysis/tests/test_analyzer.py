@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from analyzer import check_template, detect_language, analyze_document, load_rules, analyze_document_for_ui
+from template_extract import sablondan_cikar, _turkce_kucult, _alt_bolumleri_ele
 
 passed = 0
 failed = 0
@@ -146,6 +147,91 @@ check(
 
 sonuc = analyze_document_for_ui("olmayan_dosya.pdf", gercek_rules)
 check("olmayan dosyada analyze_document_for_ui cokmuyor, skor 0 donuyor", sonuc["languageTemplate"]["score"] == 0)
+
+# --- Sablon dosyasindan otomatik cikarim ------------------------------------
+#
+# NEDEN VAR: Yarisma Yoneticisi zorunlu basliklari ve kriter agirliklarini
+# TEK TEK elle giriyordu. TEKNOFEST'in resmi sablon dosyalari bu bilgiyi
+# zaten makine-okunur bicimde tasiyor (Word baslik stilleri + "(N Puan)").
+ORNEK_DIZIN = Path(__file__).resolve().parent.parent / "sample_reports"
+OTR_SABLONU = ORNEK_DIZIN / "havacilikta_yz_ktr" / "sablon_OTR_2026.docx"
+PDR_SABLONU = ORNEK_DIZIN / "referans_2026_pdr_sablonu_universite.docx"
+
+check(
+    "Turkce kucultme noktali I tuzagina dusmuyor",
+    _turkce_kucult("ŞEKİL LİSTESİ") == "şekil listesi",
+)
+# Python'un kendi casefold'u burada "şeki̇l li̇stesi̇" uretiyor (i + birlesen
+# nokta) ve duz metinle eslesmiyor - bu tuzak bu projede daha once gercek bir
+# hataya yol acti.
+check(
+    "str.casefold() bu is icin YETERSIZ (tuzagin kendisi)",
+    "ŞEKİL LİSTESİ".casefold() != "şekil listesi",
+)
+
+# Alt bolum eleme kurali: cocuklarin toplami ebeveynin puanina esitse elenir.
+check(
+    "alt bolumler (10+15+5=30) ana bolumun icinden eleniyor",
+    [b["baslik"] for b in _alt_bolumleri_ele([
+        {"baslik": "ANA", "agirlik": 30},
+        {"baslik": "alt-1", "agirlik": 10},
+        {"baslik": "alt-2", "agirlik": 15},
+        {"baslik": "alt-3", "agirlik": 5},
+        {"baslik": "SONRAKI", "agirlik": 70},
+    ])] == ["ANA", "SONRAKI"],
+)
+check(
+    "tek bir esit puanli komsu alt bolum SAYILMIYOR (kardes olabilir)",
+    len(_alt_bolumleri_ele([
+        {"baslik": "A", "agirlik": 50},
+        {"baslik": "B", "agirlik": 50},
+    ])) == 2,
+)
+
+if OTR_SABLONU.exists():
+    otr = sablondan_cikar(str(OTR_SABLONU))
+    check(
+        "resmi OTR sablonundan 8 ana baslik cikariliyor",
+        len(otr["basliklar"]) == 8,
+    )
+    check(
+        "OTR agirliklari TAM 100'e topluyor (naif cikarim 130 verir)",
+        otr["agirlik_toplami"] == 100,
+    )
+    check(
+        "belge susleri (SEKIL LISTESI / TABLO LISTESI) basliklara girmiyor",
+        not any("LİSTESİ" in b for b in otr["basliklar"]),
+    )
+    check(
+        "sayfa numaralari basliga yapismiyor",
+        "PROJE MEVCUT DURUM DEĞERLENDİRMESİ" in otr["basliklar"],
+    )
+    check("temiz cikarimda uyari uretilmiyor", otr["uyarilar"] == [])
+
+if PDR_SABLONU.exists():
+    pdr = sablondan_cikar(str(PDR_SABLONU))
+    check(
+        "universite PDR sablonu da tam 100'e topluyor",
+        pdr["agirlik_toplami"] == 100,
+    )
+    check(
+        "farkli sablon FARKLI baslik seti veriyor (sabit liste degil)",
+        pdr["basliklar"] == ["GİRİŞ", "YÖNTEM", "BULGULAR", "SONUÇ", "KAYNAKÇA"],
+    )
+
+# Hata yollari: cokmuyor, sebebini soyluyor
+bozuk = sablondan_cikar("olmayan_dosya.docx")
+check("olmayan dosyada cokmuyor", bozuk["basliklar"] == [] and bozuk["uyarilar"])
+desteksiz = sablondan_cikar("bir_dosya.txt")
+check(
+    "desteklenmeyen turde sebebi soyluyor",
+    any("Desteklenmeyen" in u for u in desteksiz["uyarilar"]),
+)
+eski_doc = sablondan_cikar("eski.doc")
+check(
+    "eski .doc icin yol gosteriyor (.docx olarak kaydedin)",
+    any(".docx" in u for u in eski_doc["uyarilar"]),
+)
 
 print(f"\n{passed} basarili, {failed} basarisiz")
 sys.exit(1 if failed else 0)
