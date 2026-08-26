@@ -155,13 +155,52 @@ def main():
         ).status_code
         == 403,
     )
+    # KENDI KENDINE KAYIT ARTIK ACIK - ama tek basina HICBIR SEY acmiyor.
+    #
+    # Kayit hicbir rol ve hicbir kurum vermiyor; takim bagi yalnizca e-posta
+    # DOGRULANDIGINDA kuruluyor. Kara liste yerine bu tam kapatma sart
+    # olmustu: `REFEREE` ayricalikli roller listesinde degil ve kendine hakem
+    # rolu veren biri /api/reports/lookup ile kurumun butun basvuru
+    # kunyelerini okuyabilirdi.
+    kayit = c.post(
+        "/api/auth/register",
+        json={
+            "email": f"kendi_kaydi_{EK}@test.org",
+            "password": "parola1234",
+            "roles": ["REFEREE"],
+        },
+    )
+    kontrol("kendi kendine kayit acik", kayit.status_code == 202, str(kayit.status_code))
+    kendi_giris = c.post(
+        "/api/auth/login",
+        data={"username": f"kendi_kaydi_{EK}@test.org", "password": "parola1234"},
+    ).json()
     kontrol(
-        "kendi kendine kayit KAPALI",
-        c.post(
-            "/api/auth/register",
-            json={"email": "davetsiz@test.org", "password": "p", "roles": ["REFEREE"]},
+        "kayit HICBIR ROL vermiyor",
+        kendi_giris.get("roles") == [] and kendi_giris.get("active_role") is None,
+        str(kendi_giris.get("roles")),
+    )
+    kontrol("kayit hesabi DOGRULANMAMIS", kendi_giris.get("email_verified") is False)
+    kontrol(
+        "dogrulanmamis hesap veri GORMUYOR",
+        c.get(
+            "/api/reports",
+            headers={"Authorization": f"Bearer {kendi_giris['access_token']}"},
         ).status_code
         == 403,
+    )
+    # Sifre sifirlama VARLIK KAHINI olmamali: kayitli ve kayitsiz adres ayni
+    # cevabi vermeli, yoksa herhangi biri adres deneyerek sistemde kimin
+    # hesabi oldugunu ogrenirdi.
+    a = c.post(
+        "/api/auth/password-reset/request",
+        json={"email": f"kendi_kaydi_{EK}@test.org"},
+    )
+    b = c.post("/api/auth/password-reset/request", json={"email": "hic.yok@hicbir.org"})
+    kontrol(
+        "sifirlama istegi varlik kahini DEGIL",
+        a.status_code == b.status_code == 202 and a.json() == b.json(),
+        f"{a.status_code}/{b.status_code}",
     )
 
     # Yarismaci taraflari SEED'lenmis takim uyeleri.
@@ -672,7 +711,14 @@ def main():
     )
 
     # Uye yonetimi: kurumun tum e-posta rehberi, yalnizca sorumluya acik.
-    cbu_uyeler = c.get("/api/organizations/me/members", headers=cbu_sorumlu).json()
+    # Yanit artik SAYFALANMIS: {items, total, limit, offset}
+    cbu_sayfa = c.get("/api/organizations/me/members", headers=cbu_sorumlu).json()
+    cbu_uyeler = cbu_sayfa["items"]
+    kontrol(
+        "uye listesi sayfalanmis geliyor",
+        "total" in cbu_sayfa and cbu_sayfa["limit"] == 25,
+        str({k: v for k, v in cbu_sayfa.items() if k != "items"}),
+    )
     kontrol(
         "uye listesi yalnizca kendi kurumu",
         all(u["email"].endswith("@cbu.edu.tr") for u in cbu_uyeler),
@@ -682,6 +728,110 @@ def main():
         "uye listesi yoneticiye KAPALI",
         c.get("/api/organizations/me/members", headers=cbu_yonetici).status_code == 403,
     )
+
+    # ------------------------------------ dosya adindan takim + dogrulama
+    bolum("Dosya adindan takim ve e-posta dogrulama")
+    #
+    # Kullanicinin istedigi akisin TAMAMI, uctan uca:
+    #   yonetici dosyayi e-postalarla adlandirip birakir
+    #     -> takim otomatik olusur, uyeler BEKLEYEN durumda
+    #   ogrenci kendi kendine kayit olur
+    #     -> hicbir sey goremez (dogrulanmadi)
+    #   e-postasini dogrular
+    #     -> bekleyen uyelik BAGLANIR, COMPETITOR rolu gelir, raporunu gorur
+    ogr_eposta = f"ogr_{EK}@okul.edu.tr"
+    ark_eposta = f"ark_{EK}@okul.edu.tr"
+    with open(ORNEK_RAPORLAR[0], "rb") as f:
+        dosya_yukleme = c.post(
+            "/api/reports/upload",
+            data={"competition_id": yar_id},
+            files={
+                "file": (
+                    f"{ogr_eposta}_{ark_eposta}.pdf",
+                    f,
+                    "application/pdf",
+                )
+            },
+            headers=yonetici,
+        )
+    kontrol(
+        "takim kimligi OLMADAN aktarim calisiyor",
+        dosya_yukleme.status_code == 201,
+        f"HTTP {dosya_yukleme.status_code} {dosya_yukleme.text[:120]}",
+    )
+    if dosya_yukleme.status_code == 201:
+        yeni_rid = dosya_yukleme.json()["id"]
+        kontrol(
+            "takim dosya adindan turetildi",
+            bool(dosya_yukleme.json().get("team_name")),
+            str(dosya_yukleme.json().get("team_name")),
+        )
+
+        kayit2 = c.post(
+            "/api/auth/register",
+            json={"email": ogr_eposta, "password": "parola1234"},
+        )
+        kontrol("ogrenci kayit olabiliyor", kayit2.status_code == 202)
+
+        ogr_giris = c.post(
+            "/api/auth/login", data={"username": ogr_eposta, "password": "parola1234"}
+        ).json()
+        ogr_tok = {"Authorization": f"Bearer {ogr_giris['access_token']}"}
+        kontrol(
+            "DOGRULAMADAN ONCE raporu goremiyor",
+            c.get(f"/api/reports/{yeni_rid}", headers=ogr_tok).status_code == 403,
+        )
+
+        jeton = kayit2.json().get("dev_token")
+        if not jeton:
+            # DEV_EXPOSE_EMAIL_TOKEN kapaliysa jeton yalnizca outbox'ta.
+            # Bu bir HATA DEGIL - uretimdeki dogru davranis bu.
+            kontrol(
+                "dogrulama jetonu yanitta GORUNMUYOR (uretim davranisi)",
+                True,
+                "DEV_EXPOSE_EMAIL_TOKEN=1 ile calistirirsaniz zincirin kalani da sinanir",
+            )
+        else:
+            d = c.post("/api/auth/verify-email", json={"token": jeton})
+            kontrol("dogrulama basarili", d.status_code == 200, str(d.status_code))
+            kontrol(
+                "bekleyen uyelik BAGLANDI",
+                d.json().get("linked_teams") == 1,
+                str(d.json().get("linked_teams")),
+            )
+            kontrol(
+                "jeton TEK KULLANIMLIK",
+                c.post("/api/auth/verify-email", json={"token": jeton}).status_code == 400,
+            )
+            ogr_giris2 = c.post(
+                "/api/auth/login",
+                data={"username": ogr_eposta, "password": "parola1234"},
+            ).json()
+            kontrol(
+                "COMPETITOR rolu ve kurum verildi",
+                ogr_giris2.get("active_role") == "COMPETITOR"
+                and ogr_giris2.get("active_organization_id") == "org-t3",
+                f"{ogr_giris2.get('active_organization_id')}:{ogr_giris2.get('active_role')}",
+            )
+            kontrol(
+                "artik KENDI raporunu goruyor",
+                c.get(
+                    f"/api/reports/{yeni_rid}",
+                    headers={"Authorization": f"Bearer {ogr_giris2['access_token']}"},
+                ).status_code
+                == 200,
+            )
+            # Takim arkadasi da gormeli - kullanicinin "takimdaki herkes
+            # sonucu gorebilsin" kurali.
+            c.post("/api/auth/register", json={"email": ark_eposta, "password": "parola1234"})
+            ark_kayit = c.post(
+                "/api/auth/register", json={"email": ark_eposta, "password": "parola1234"}
+            )
+            kontrol(
+                "ikinci kayit denemesi AYNI cevabi veriyor",
+                ark_kayit.status_code == 202,
+                str(ark_kayit.status_code),
+            )
 
     print(f"\n{'=' * 52}\n{gecti} gecti, {kaldi} kaldi")
     return 1 if kaldi else 0

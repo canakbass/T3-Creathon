@@ -52,6 +52,56 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 hepsine sahip. Girişte **kurum + rol** seçim ekranı çıkar; tek hesapla tüm
 akış denenebilir.
 
+### Rapor nasıl bir takıma bağlanıyor?
+
+Yönetici dosyaları bırakır; **takım dosya adındaki e-postalardan çıkarılır**:
+
+```
+232805068@ogr.cbu.edu.tr_canakbasforspecial@gmail.com.pdf   → iki kişilik takım
+Yapay Zeka Projesi ali@okul.edu.tr.pdf                      → tek kişi, proje adı "Yapay Zeka Projesi"
+matematik_rapor.docx                                        → e-posta yok, arayüz sorar
+```
+
+**Takım kimliği hiçbir yerde istenmiyor** — yöneticinin elinde olmayan bir
+bilgiydi. Elinde gerçekten olan şey teslim edilen dosyalar ve onları kimin
+gönderdiği.
+
+Ekran çıkarılan e-postaları **gösterir ve düzenlettirir**; onaylamadan hiçbir
+şey gönderilmez. Bu bir kolaylık değil güvenlik gereği: doğrulama "bu kutunun
+sahibi misin" sorusunu cevaplar, "bu kişi bu takımda mı" sorusunu
+**cevaplamaz**. Dosya adındaki bir harf hatası, e-postasını doğrulayan yabancı
+birine o takımın tüm sonuçlarını verirdi — o soruyu yalnızca yönetici
+cevaplayabilir.
+
+### Hesap açma: iki yol, birbirini tamamlıyor
+
+| Yol | Kimliğe kim kefil | Ne zaman |
+|---|---|---|
+| **Yönetici açar** (`POST /api/auth/users`) | Yönetici | Hakem, yönetici, bilinen katılımcı |
+| **Kendi kayıt olur** (`/api/auth/register`) | E-posta doğrulaması | Yarışmacı kendi sonucunu sorgulamak istediğinde |
+
+**Kayıt tek başına hiçbir şey açmıyor:** hesap açılır ama *hiçbir rol ve
+hiçbir kurum verilmez*. Takım bağı **kayıt anında değil, doğrulama anında**
+kurulur — aksi halde saldırgan kayıt olur, doğrulamaz ve bağ yine kurulmuş
+olurdu.
+
+Doğrulanan e-posta, o adresle yüklenmiş bekleyen takım üyeliklerine bağlanır
+ve **yalnızca o takımın kurumunda `COMPETITOR`** rolü verilir. Yani kendi
+kendine kayıt, kurum sınırını aşmanın yeni bir yolu değil: kuruma giriş yine
+yöneticinin yaptığı bir eylemden (raporu o e-postayla yüklemesinden) doğar.
+
+Şifre sıfırlandığında **eldeki tüm oturumlar düşer** (`token_epoch`). Bu
+olmadan çalınmış bir token, kurban şifresini sıfırladıktan sonra da bir saat
+daha çalışırdı ve sıfırlamanın tek amacı ("hesabı geri al") ortadan kalkardı.
+
+#### SMTP olmadan da çalışıyor
+
+`EMAIL_BACKEND=file` (varsayılan) mektupları `backend/outbox/*.eml` olarak
+diske yazar. **Akış birebir gerçek** — jeton üretilir, özeti saklanır, süresi
+işler, bağlantı tıklanır. Demoda outbox dosyasını açıp bağlantıyı
+kopyalayın. Üretimde `EMAIL_BACKEND=smtp` ve dört `SMTP_*` değişkeni yeter;
+kod değişmez (bkz. `backend/.env.example`).
+
 ### Kurumlar (çok kiracılık)
 
 Sistem tek kurumluk değil. Her yarışma, rapor, takım ve kullanıcı rolü bir
@@ -530,9 +580,9 @@ rapor yüklerken **hangi takım adına** yüklediğini seçmek zorundadır.
 |---|---|
 | `ai-doc-analysis` | 46 başarılı, 0 başarısız |
 | `ai-scoring` | 102 başarılı, 0 başarısız |
-| `backend` (pytest) | 139 başarılı, 0 başarısız |
-| `frontend` (jest) | 137 başarılı, 0 başarısız |
-| `scripts/e2e-test.py` (canlı sunucu) | 61 başarılı, 0 başarısız |
+| `backend` (pytest) | 244 başarılı, 0 başarısız |
+| `frontend` (jest) | 178 başarılı, 0 başarısız |
+| `scripts/e2e-test.py` (canlı sunucu) | 76 başarılı, 0 başarısız |
 | `frontend` (next build) | başarılı |
 | Uçtan uca — API akışı | 40 başarılı, 0 başarısız |
 | Uçtan uca — arayüz istek şekilleri (canlı backend) | 32 başarılı, 0 başarısız |
