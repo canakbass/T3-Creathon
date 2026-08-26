@@ -154,8 +154,33 @@ export interface ReportWithAnalysis {
   decision: RefereeDecision | null;
 }
 
-export async function listReports(options: { status?: string } = {}): Promise<EvaluationReport[]> {
-  const query = options.status ? `?status=${encodeURIComponent(options.status)}` : "";
+/**
+ * Rapor listesi filtreleri.
+ *
+ * Hepsi YETKİ FİLTRESİNİN ÜSTÜNE biniyor, onun yerine geçmiyor: filtre
+ * daraltır, genişletmez. Bir hakem `competitionId` vererek kendisine
+ * atanmamış raporları göremez.
+ */
+export interface ListReportsFilters {
+  status?: string;
+  competitionId?: string;
+  categoryLabel?: string;
+  /** Hakem kararı VERİLMEMİŞ raporlar — "elimde ne kaldı". */
+  undecided?: boolean;
+  /** Yalnızca süren değerlendirmeler (bitmişler listeyi şişirmesin). */
+  activeOnly?: boolean;
+}
+
+export async function listReports(
+  options: ListReportsFilters = {},
+): Promise<EvaluationReport[]> {
+  const p = new URLSearchParams();
+  if (options.status) p.set("status", options.status);
+  if (options.competitionId) p.set("competition_id", options.competitionId);
+  if (options.categoryLabel) p.set("category_label", options.categoryLabel);
+  if (options.undecided) p.set("undecided", "true");
+  if (options.activeOnly) p.set("active_only", "true");
+  const query = p.toString() ? `?${p.toString()}` : "";
   const [wire, categoryNames] = await Promise.all([
     apiFetch<WireReport[]>(`/api/reports${query}`),
     loadCategoryNames(),

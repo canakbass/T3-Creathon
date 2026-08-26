@@ -365,3 +365,62 @@ def test_parametresiz_cagri_eski_davranisi_koruyor(client, sahne):
     assert d["assigned"] == 4, d
     yukler = [x["assigned_count"] for x in d["load"]]
     assert max(yukler) - min(yukler) <= 1, f"yuk dengesiz: {yukler}"
+
+
+# --- Liste filtreleri -----------------------------------------------------
+
+def test_filtreler_yetkinin_USTUNE_biniyor(client, sahne):
+    """KRITIK: filtre daraltir, GENISLETMEZ.
+
+    Hakem `competition_id` vererek kendisine ATANMAMIS raporlari
+    goremez - _erisim_filtresi her halukarda uygulaniyor. Filtreyi yetki
+    kontrolunun yerine gecirmek, bu oturumda kapatilan acigin (atanmamis
+    hakem her raporu goruyordu) yeni bir kapisi olurdu.
+    """
+    yabanci = sahne["yabanci"]  # hicbir rapora atanmamis hakem
+    for q in (
+        {},
+        {"competition_id": sahne["yar_id"]},
+        {"undecided": "true"},
+        {"active_only": "true"},
+        {"category_label": "Lise"},
+    ):
+        r = client.get("/api/reports", params=q, headers=yabanci)
+        assert r.status_code == 200, (q, r.text[:200])
+        assert r.json() == [], f"filtre yetkiyi gevsetti: {q}"
+
+
+def test_undecided_karar_verilmisleri_eliyor(client, sahne):
+    yonetici, rid = sahne["yonetici"], sahne["rapor_id"]
+    once = client.get("/api/reports", params={"undecided": "true"}, headers=yonetici).json()
+    assert any(x["id"] == rid for x in once)
+
+    client.post(
+        f"/api/reports/{rid}/decision",
+        json={
+            "outcome": "approve",
+            "final_score": 88,
+            "rationale": "Rapor beklenen duzeyi karsiliyor, gerekce yeterince uzun.",
+        },
+        headers=sahne["atanan"],
+    )
+    sonra = client.get("/api/reports", params={"undecided": "true"}, headers=yonetici).json()
+    assert all(x["id"] != rid for x in sonra), "karar verilmis rapor hala 'degerlendirilmemis'te"
+
+
+def test_competition_ve_kategori_filtresi(client, sahne):
+    yonetici = sahne["yonetici"]
+    kendi = client.get(
+        "/api/reports", params={"competition_id": sahne["yar_id"]}, headers=yonetici
+    ).json()
+    assert any(x["id"] == sahne["rapor_id"] for x in kendi)
+
+    baskasi = client.get(
+        "/api/reports", params={"competition_id": "OLMAYAN"}, headers=yonetici
+    ).json()
+    assert baskasi == []
+
+    # Bu yarismanin kategori etiketi yok -> etikete gore filtre bos donmeli
+    assert client.get(
+        "/api/reports", params={"category_label": "Lise"}, headers=yonetici
+    ).json() == []

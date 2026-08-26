@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { listReports } from "@/lib/api";
+import { listReports, type ListReportsFilters } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
 import type { EvaluationReport } from "@/lib/mock-reports";
 import { ReportList } from "./report-list";
 import { ReportListSkeleton } from "./report-list-skeleton";
 import { ReportDetail } from "./report-detail";
 import { ReportLookup } from "./report-lookup";
+import { ReportFilters } from "./report-filters";
 
 interface RefereeDashboardProps {
   /** Provide directly (e.g. in tests) to skip the network fetch entirely. */
@@ -22,18 +23,19 @@ export function RefereeDashboard({ initialReports }: RefereeDashboardProps) {
   );
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filtreler, setFiltreler] = useState<ListReportsFilters>({});
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      setReports(await listReports());
+      setReports(await listReports(filtreler));
     } catch (cause) {
       setError(describeError(cause));
       // Liste null kalirsa iskelet sonsuza kadar doner; bos diziye
       // cekiyoruz ki hata mesaji gorunur olsun.
       setReports([]);
     }
-  }, []);
+  }, [filtreler]);
 
   useEffect(() => {
     if (initialReports) return;
@@ -76,6 +78,10 @@ export function RefereeDashboard({ initialReports }: RefereeDashboardProps) {
           atanmis raporlari (asagida); arama, elinde bir kimlik olan
           basvuruyu bulmak icin. Ikisi karistirilmamali. */}
       <ReportLookup onOpen={setSelectedId} />
+
+      {/* Filtre, ARAMANIN altinda ve listenin ustunde: arama "elimdeki
+          kimligi cozumle", filtre "listemi daralt" isi. */}
+      <ReportFilters value={filtreler} onChange={setFiltreler} />
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <aside className="w-full overflow-hidden rounded-2xl border border-border bg-surface shadow-sm lg:w-96 lg:shrink-0">

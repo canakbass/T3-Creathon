@@ -608,6 +608,10 @@ def _rapor_getir_yetkiliyse(report_id: str, user: models.User, db: Session) -> m
 @router.get("", response_model=List[schemas.ReportResponse])
 def list_reports(
     status: Optional[str] = None,
+    competition_id: Optional[str] = None,
+    category_label: Optional[str] = None,
+    undecided: Optional[bool] = None,
+    active_only: Optional[bool] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
@@ -618,6 +622,33 @@ def list_reports(
 
     if status:
         query = query.filter(models.Report.status == status)
+
+    # --- Filtreler -------------------------------------------------------
+    #
+    # Hepsi YETKI FILTRESININ USTUNE biniyor, onun yerine gecmiyor: filtre
+    # daraltir, genisletmez. Bir hakem `competition_id` vererek kendisine
+    # atanmamis raporlari goremez - _erisim_filtresi zaten uygulandi.
+    if competition_id:
+        query = query.filter(models.Report.competition_id == competition_id)
+
+    if category_label:
+        # Yarismanin kategori/seviye etiketine gore ("Lise", "Vize"...).
+        query = query.join(
+            models.Competition, models.Report.competition_id == models.Competition.id
+        ).filter(models.Competition.category_label == category_label)
+
+    if undecided:
+        # Hakem karari VERILMEMIS raporlar - "elimde ne kaldi" sorusu.
+        query = query.outerjoin(
+            models.FinalDecision, models.FinalDecision.report_id == models.Report.id
+        ).filter(models.FinalDecision.id.is_(None))
+
+    if active_only:
+        # Yalnizca SUREN yarismalar. Bitmis bir yarismanin raporlari
+        # hakemin gunluk listesini gereksiz sisiriyor.
+        query = query.join(
+            models.Competition, models.Report.competition_id == models.Competition.id
+        ).filter(models.Competition.status.in_(("open", "closed", "evaluating")))
 
     # ai_analysis.results her yanit oncesi uretilmek zorunda (bkz.
     # _attach_analysis_results). Bu eksik oldugu icin endpoint, analiz
