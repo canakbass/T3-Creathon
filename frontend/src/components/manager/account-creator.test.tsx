@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AccountCreator } from "./account-creator";
 import { useAuthStore } from "@/store/auth-store";
@@ -167,5 +167,52 @@ describe("AccountCreator", () => {
     expect(secenekler).toContain("COMPETITION_MANAGER");
     expect(secenekler).toContain("ORG_OWNER");
     expect(screen.queryByTestId("account-role-note")).not.toBeInTheDocument();
+  });
+
+  it("AYNI e-postayi iki kez girmek tek istek atiyor", async () => {
+    // Kullanicinin bildirdigi konsol hatasinin kaynagi:
+    //   "Encountered two children with the same key, 33232801068@gmail.com"
+    // Liste Excel'den kopyalandigi icin tekrar eden adres olagan. Tekrar
+    // elenmezse React ayni anahtari iki kez gorur, satirlari birlestirir ve
+    // yonetici acilan hesaplarin YANLIS listesini gorur; ustelik ikinci
+    // istek zaten "zaten kayitli" hatasi alirdi.
+    const fetchMock = mockCreate();
+    const user = userEvent.setup();
+    render(<AccountCreator />);
+
+    await user.type(
+      screen.getByTestId("account-emails"),
+      "ayni@takim.org\nAYNI@takim.org\nayni@takim.org",
+    );
+    await user.click(screen.getByTestId("account-submit"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("account-results")).toHaveTextContent("1 hesap açıldı"),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Tekrar eden testid, testi de belirsiz hale getirirdi.
+    expect(screen.getAllByTestId("account-row-ayni@takim.org")).toHaveLength(1);
+  });
+
+  it("boşlukla ayrılmış listeyi de kabul eder", async () => {
+    // Gerçek kullanımda liste bazen tek satırda boşluklarla yapıştırılıyor.
+    const fetchMock = mockCreate();
+    const user = userEvent.setup();
+    render(<AccountCreator />);
+
+    await user.type(screen.getByTestId("account-emails"), "a@b.org c@d.org");
+    await user.click(screen.getByTestId("account-submit"));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("sayaç TEKİLLEŞTİRİLMİŞ adet gösteriyor", () => {
+    // Düğmede "3 hesap aç" yazıp 1 hesap açmak, yöneticiye kaç kişiye şifre
+    // ileteceği konusunda yanlış bilgi verirdi.
+    mockCreate();
+    render(<AccountCreator />);
+    const kutu = screen.getByTestId("account-emails");
+    fireEvent.change(kutu, { target: { value: "x@y.org, X@Y.org, z@w.org" } });
+    expect(screen.getByTestId("account-submit")).toHaveTextContent("2 hesap aç");
   });
 });

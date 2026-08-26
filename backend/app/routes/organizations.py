@@ -22,9 +22,10 @@ yapiliyor.
 """
 
 import uuid
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -84,34 +85,99 @@ def get_my_organization(
     }
 
 
-@router.get("/me/members", response_model=List[schemas.OrganizationMember])
+# Bir sayfada kac uye. Kurumlar buyudukce "hepsini diz" calismaz: yuzlerce
+# satir hem yavas hem okunamaz. Ust sinir, istemcinin `limit=100000` yazip
+# sayfalamayi etkisiz kilmasini engelliyor.
+_SAYFA_VARSAYILAN = 25
+_SAYFA_EN_FAZLA = 100
+
+
+@router.get("/me/members", response_model=schemas.OrganizationMemberPage)
 def list_members(
+    role: Optional[str] = Query(default=None, description="Yalnizca bu role sahip uyeler"),
+    q: Optional[str] = Query(default=None, description="E-posta ya da adda gecen metin"),
+    limit: int = Query(default=_SAYFA_VARSAYILAN, ge=1, le=_SAYFA_EN_FAZLA),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(_SORUMLU),
 ):
-    """Kurumun uyeleri ve rolleri.
+    """Kurumun uyeleri - SAYFALANMIS ve rol/metin ile filtrelenebilir.
 
     YALNIZCA SORUMLUYA: bu liste kurumun tum e-posta rehberi. Yarisma
     yoneticisine de acsaydik, hesabi ele geciren biri once rehberi indirir
     sonra hedefli saldiriya gecerdi.
+
+    NEDEN SAYFALAMA VERI TABANINDA, ARAYUZDE DEGIL: butun uyeleri gonderip
+    tarayicida kesmek, "sayfalama" gorunumu verirken rehberin TAMAMINI yine
+    de tel uzerinden gecirir. Ayrica kurum buyudukce yanit buyur ve yavaslar.
+
+    FILTRE ROLE GORE SAYIYOR: `total`, filtre uygulandiktan SONRAKI sayidir.
+    Filtresiz toplami dondurseydik "3 sonuc bulundu" yazip 40 sayfa
+    gosterirdik.
     """
     kurum = _kurum(db, current_user)
-    kayitlar = (
-        db.query(models.UserRole)
-        .filter(models.UserRole.organization_id == kurum.id)
-        .all()
-    )
-    roller_map: dict[str, list] = {}
-    for k in kayitlar:
-        roller_map.setdefault(k.user_id, []).append(k.role)
 
-    if not roller_map:
-        return []
-    kullanicilar = (
-        db.query(models.User).filter(models.User.id.in_(list(roller_map))).all()
+    if role is not None and role not in models.ROLLER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Gecersiz rol. Gecerli roller: {', '.join(models.ROLLER)}.",
+        )
+
+    # Bu kurumdaki roller, kullanici basina toplaniyor. Sayfalama KULLANICI
+    # basina yapilmali, UserRole SATIRI basina degil: iki rolu olan bir uye
+    # tek satir gorunuyor ve iki sayfaya bolunmemeli.
+    uye_sorgusu = (
+        db.query(models.User)
+        .join(models.UserRole, models.UserRole.user_id == models.User.id)
+        .filter(models.UserRole.organization_id == kurum.id)
     )
-    return sorted(
-        (
+
+    if role:
+        uye_sorgusu = uye_sorgusu.filter(models.UserRole.role == role)
+
+    if q and q.strip():
+        # Arama, SAKLANAN katlanmis anahtara karsi yapiliyor (bkz.
+        # models.User.search_key). `lower(email) LIKE ...` yazsaydik Turkce
+        # calismazdi: SQLite'in `lower`i yalnizca ASCII kucultur ve "çift"
+        # arayan biri "Çift Rollü Kişi"yi BULAMAZDI - bos sonuc, yanlis
+        # sonuctan daha ikna edici oldugu icin en tehlikeli hata sinifi.
+        #
+        # Joker karakterler kacisliyor: arama kutusuna `%` yazan biri
+        # filtreyi tamamen etkisiz kilmamali. "Filtreledim" sanan sorumluya
+        # filtresiz liste gostermek yanlis karar aldirir.
+        aranan = models.turkce_katla(q.strip())
+        kacisli = aranan.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        uye_sorgusu = uye_sorgusu.filter(
+            func.coalesce(models.User.search_key, "").like(f"%{kacisli}%", escape="\\")
+        )
+
+    # DISTINCT: iki rolu olan uye, rol filtresi yokken JOIN yuzunden iki kez
+    # gelirdi - hem sayim hem sayfa yanlis olurdu.
+    uye_sorgusu = uye_sorgusu.distinct()
+
+    toplam = uye_sorgusu.count()
+    kullanicilar = (
+        uye_sorgusu.order_by(models.User.email).offset(offset).limit(limit).all()
+    )
+
+    # Roller AYRI bir sorguda: rol filtresi varken JOIN'den gelen roller
+    # yalnizca filtrelenmis olanlar olurdu ve satirda "bu uyenin tek rolu
+    # var" gibi YANLIS bir izlenim dogardi.
+    kimlikler = [u.id for u in kullanicilar]
+    roller_map: dict[str, list] = {}
+    if kimlikler:
+        for k in (
+            db.query(models.UserRole)
+            .filter(
+                models.UserRole.organization_id == kurum.id,
+                models.UserRole.user_id.in_(kimlikler),
+            )
+            .all()
+        ):
+            roller_map.setdefault(k.user_id, []).append(k.role)
+
+    return {
+        "items": [
             {
                 "id": u.id,
                 "email": u.email,
@@ -119,9 +185,11 @@ def list_members(
                 "roles": sorted(roller_map.get(u.id, [])),
             }
             for u in kullanicilar
-        ),
-        key=lambda x: x["email"],
-    )
+        ],
+        "total": toplam,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 def _uye_getir(db: Session, user_id: str, kurum_id: str) -> models.User:

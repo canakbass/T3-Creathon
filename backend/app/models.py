@@ -1,4 +1,5 @@
 import datetime
+import unicodedata
 from sqlalchemy import (
     Column,
     String,
@@ -9,6 +10,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import event
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -17,6 +19,43 @@ def _utcnow() -> datetime.datetime:
     """datetime.datetime.utcnow() deprecated oldugu icin (Python 3.12+) -
     ayni naive-UTC davranisini timezone-aware API ile uretiyoruz."""
     return datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+
+
+# TURKCE KATLAMA: arama ve karsilastirma icin tek tanim.
+#
+# NEDEN GEREKLI: SQLite'in `lower()` fonksiyonu YALNIZCA ASCII harfleri
+# kucultuyor. "Çift Rollü Kişi" veri tabaninda `lower()` gectikten sonra hala
+# "Çift Rollü Kişi" kaliyor; Python tarafinda "çift rollü" arayan bir sorgu
+# hicbir seyle eslesmiyor. Sonuc: sorumlu arama kutusuna "çift" yazip "bu kisi
+# kurumda yok" sonucuna variyor - bos sonuc, yanlis sonuctan daha ikna edici
+# oldugu icin en tehlikeli hata sinifi.
+#
+# SIRA ONEMLI - once CEVIR, sonra kucult:
+#   "İ".lower() -> "i̇"  (i + BIRLESIK NOKTA U+0307, iki kod noktasi!)
+# Bu, projede daha once bir kez tuzaga dusurdu (baslik eslestirmede
+# "ŞEKİL LİSTESİ" hicbir zaman eslesmedi). Haritayi once uygulayarak
+# "İ" -> "i" yapiyoruz ve birlesik nokta hic olusmuyor.
+_TR_HARITA = str.maketrans(
+    {
+        "İ": "i", "I": "i", "ı": "i",
+        "Ş": "s", "ş": "s",
+        "Ğ": "g", "ğ": "g",
+        "Ü": "u", "ü": "u",
+        "Ö": "o", "ö": "o",
+        "Ç": "c", "ç": "c",
+        "Â": "a", "â": "a", "Î": "i", "î": "i", "Û": "u", "û": "u",
+    }
+)
+
+
+def turkce_katla(metin) -> str:
+    """Aramada karsilastirilabilir hale getirir: diakritiksiz, kucuk harf."""
+    if not metin:
+        return ""
+    cevrilmis = metin.translate(_TR_HARITA)
+    # Kalan diakritikler (é, ñ, ü gibi baska dillerden) icin genel katlama.
+    ayrik = unicodedata.normalize("NFKD", cevrilmis)
+    return "".join(k for k in ayrik if not unicodedata.combining(k)).lower()
 
 
 # Sistemdeki roller (bkz. docs/PROJECT_CONTEXT.md Bolum 2).
@@ -57,6 +96,16 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
+    # ARAMA ANAHTARI: e-posta + ad, diakritiksiz ve kucuk harfe katlanmis.
+    #
+    # NEDEN AYRI BIR SUTUN: aramayi `lower(email) LIKE ...` ile yapmak SQLite'ta
+    # Turkce'de CALISMIYOR (bkz. turkce_katla). Katlamayi Python'da yapip
+    # sonucu SAKLIYORUZ; boylece karsilastirmanin iki tarafi da ayni kurala
+    # gore katlanmis oluyor ve davranis SQLite ile PostgreSQL'de AYNI kaliyor.
+    # Asagidaki olay dinleyicisi bunu her yazmada kendisi hesapliyor - elle
+    # doldurulan bir alan olsaydi, kullaniciyi yazan yerlerden birini
+    # unutmak aramadan SESSIZCE dusurmek demekti.
+    search_key = Column(String, index=True, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
 
     # Rol artik BURADA DEGIL, ayri UserRole tablosunda.
@@ -613,3 +662,16 @@ class FinalDecision(Base):
 
     report = relationship("Report", back_populates="final_decision")
     referee = relationship("User", back_populates="decisions")
+
+
+# --- Arama anahtarini OTOMATIK tut ---------------------------------------
+#
+# NEDEN OLAY DINLEYICISI: `search_key`i cagrı yerlerinde elle doldurmak,
+# kullanici yazan her yeri (kayit, yonetici hesap acma, tohumlama, kurum acma
+# betigi, testler) hatirlamak demekti. Biri unutulursa o kullanici aramada
+# SESSIZCE gorunmez olurdu - ve "aramada cikmiyor" ile "kurumda yok" ayirt
+# edilemez. Tek yerde, yazma aninda hesaplaniyor.
+@event.listens_for(User, "before_insert")
+@event.listens_for(User, "before_update")
+def _arama_anahtarini_hesapla(mapper, connection, hedef):  # noqa: ARG001
+    hedef.search_key = turkce_katla(f"{hedef.email or ''} {hedef.full_name or ''}")

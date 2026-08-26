@@ -29,6 +29,7 @@ import type {
   WireReport,
   WireOrganization,
   WireOrganizationMember,
+  WireOrganizationMemberPage,
   WireReportLookup,
   WireUser,
 } from "./types";
@@ -131,9 +132,32 @@ export async function getMyOrganization(): Promise<WireOrganization> {
   return apiFetch<WireOrganization>("/api/organizations/me");
 }
 
-/** Kurumun üyeleri ve rolleri — yalnızca kurum sorumlusu (ORG_OWNER). */
-export async function listOrganizationMembers(): Promise<WireOrganizationMember[]> {
-  return apiFetch<WireOrganizationMember[]>("/api/organizations/me/members");
+export interface MemberQuery {
+  role?: string | null;
+  q?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Kurumun üyeleri — SAYFALANMIŞ, yalnızca kurum sorumlusu (ORG_OWNER).
+ *
+ * Filtreleme ve sayfalama SUNUCUDA yapılıyor. Tüm üyeleri çekip tarayıcıda
+ * kesmek "sayfalama" görünümü verirken rehberin TAMAMINI yine de tel
+ * üzerinden geçirirdi — listenin yalnızca sorumluya açık olmasının anlamı
+ * kalmazdı.
+ */
+export async function listOrganizationMembers(
+  sorgu: MemberQuery = {},
+): Promise<WireOrganizationMemberPage> {
+  const params = new URLSearchParams();
+  if (sorgu.role) params.set("role", sorgu.role);
+  if (sorgu.q && sorgu.q.trim()) params.set("q", sorgu.q.trim());
+  params.set("limit", String(sorgu.limit ?? 25));
+  params.set("offset", String(sorgu.offset ?? 0));
+  return apiFetch<WireOrganizationMemberPage>(
+    `/api/organizations/me/members?${params.toString()}`,
+  );
 }
 
 export async function grantOrganizationRole(

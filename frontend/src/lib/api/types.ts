@@ -67,6 +67,18 @@ export interface WireOrganizationMember {
   roles: string[];
 }
 
+/** Sayfalanmış üye listesi. */
+export interface WireOrganizationMemberPage {
+  items: WireOrganizationMember[];
+  /**
+   * FİLTRE UYGULANDIKTAN SONRAKİ toplam. Filtresiz toplamı döndürseydik
+   * "3 sonuç bulundu" yazıp 40 sayfalık gezinme gösterirdik.
+   */
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 /** Yarışmanın değerlendirme kriteri (ağırlığıyla). */
 export interface WireCriterion {
   id: string;

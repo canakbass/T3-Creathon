@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   grantOrganizationRole,
   listOrganizationMembers,
@@ -15,38 +15,92 @@ import type { WireOrganizationMember } from "@/lib/api/types";
  *
  * Kullanıcının istediği şey: "bu superuserlar kendi kurumundaki hakemleri,
  * yöneticileri, değerlendirme yöneticileri gibi herkesi değiştirebilmeli,
- * ekleyebilmeli."
+ * ekleyebilmeli" — ve sonrasında: "herkesi dizmeyelim, sayfalama ve role göre
+ * filtreleme olsun".
  *
- * NEDEN AYRI BİR EKRAN: hesap AÇMA (AccountCreator) ile ROL DEĞİŞTİRME ayrı
- * işler. Hesap açmak kimliğe kefil olmak; rol değiştirmek mevcut bir kişinin
- * yetkisini değiştirmek. İkisi tek formda olsaydı "yeni hesap mı açıyorum,
- * var olanı mı değiştiriyorum" sorusu her seferinde belirsiz kalırdı.
+ * FİLTRELEME VE SAYFALAMA SUNUCUDA. Tüm üyeleri çekip tarayıcıda kesmek
+ * "sayfalama" görünümü verirken rehberin TAMAMINI yine de tel üzerinden
+ * geçirirdi; listenin yalnızca sorumluya açık olmasının anlamı kalmazdı.
+ *
+ * NEDEN AYRI BİR EKRAN: hesap AÇMAK (kimliğe kefil olmak) ile mevcut bir
+ * üyenin ROLÜNÜ değiştirmek ayrı işler. Tek formda olsalardı "yeni hesap mı
+ * açıyorum, var olanı mı değiştiriyorum" sorusu her seferinde belirsiz
+ * kalırdı.
  *
  * BURADA GÖRÜNEN ROLLER YALNIZCA BU KURUMDAKİLER. Aynı kişi başka bir
- * kurumda bambaşka rollere sahip olabilir ve o roller burada GÖRÜNMEZ -
+ * kurumda bambaşka rollere sahip olabilir ve o roller burada GÖRÜNMEZ —
  * görünse, bir kurumun sorumlusu üyesinin başka kurumlardaki konumunu
  * öğrenirdi.
  */
+
+const SAYFA_BOYU = 25;
+/** Arama kutusunda yazmayı bırakınca kaç ms sonra istek atılsın. */
+const ARAMA_GECIKMESI_MS = 300;
+
 export function MemberManager() {
   const [uyeler, setUyeler] = useState<WireOrganizationMember[] | null>(null);
+  const [toplam, setToplam] = useState(0);
+  const [sayfa, setSayfa] = useState(0);
+  // Sunucunun GERCEKTEN uyguladigi sayfa penceresi. Kendi sabitimizi
+  // kullanmiyoruz: sunucu `limit`i kendi ust siniriyla kirpabilir ve o
+  // durumda "3 / 1" gibi imkansiz bir sayfa numarasi gosterirdik.
+  const [pencere, setPencere] = useState({ limit: SAYFA_BOYU, offset: 0, adet: 0 });
+  const [rol, setRol] = useState("");
+  const [arama, setArama] = useState("");
+  const [gecikmisArama, setGecikmisArama] = useState("");
   const [hata, setHata] = useState<string | null>(null);
   const [calisan, setCalisan] = useState<string | null>(null);
-  const [arama, setArama] = useState("");
+  const [yukleniyor, setYukleniyor] = useState(true);
+
+  // Arama kutusu her tuşta istek atmasın: yönetici "mehmet" yazarken altı
+  // ayrı istek gider, cevaplar sırasız dönerse ekranda YANLIŞ sonuç kalır.
+  useEffect(() => {
+    const zamanlayici = setTimeout(() => setGecikmisArama(arama), ARAMA_GECIKMESI_MS);
+    return () => clearTimeout(zamanlayici);
+  }, [arama]);
+
+  // Filtre değişince ilk sayfaya dön: 4. sayfadayken filtre daraltılırsa
+  // sonuç 1 sayfaya düşer ve kullanıcı BOŞ bir sayfada kalırdı.
+  useEffect(() => {
+    setSayfa(0);
+  }, [rol, gecikmisArama]);
+
+  // Sıra numarası: yalnızca EN SON istek ekrana yazsın. Yavaş dönen eski bir
+  // istek, yeni sonucun üstüne yazarsa kullanıcı filtresine uymayan bir liste
+  // görür ve nedenini anlayamaz.
+  const istekSirasi = useRef(0);
+
+  const yukle = useCallback(async () => {
+    const benim = ++istekSirasi.current;
+    setYukleniyor(true);
+    try {
+      const sayfaVerisi = await listOrganizationMembers({
+        role: rol || null,
+        q: gecikmisArama || null,
+        limit: SAYFA_BOYU,
+        offset: sayfa * SAYFA_BOYU,
+      });
+      if (benim !== istekSirasi.current) return;
+      setUyeler(sayfaVerisi.items);
+      setToplam(sayfaVerisi.total);
+      setPencere({
+        limit: sayfaVerisi.limit || SAYFA_BOYU,
+        offset: sayfaVerisi.offset ?? 0,
+        adet: sayfaVerisi.items.length,
+      });
+      setHata(null);
+    } catch (cause) {
+      if (benim !== istekSirasi.current) return;
+      setHata(describeError(cause));
+      setUyeler([]);
+    } finally {
+      if (benim === istekSirasi.current) setYukleniyor(false);
+    }
+  }, [rol, gecikmisArama, sayfa]);
 
   useEffect(() => {
-    let iptal = false;
-    (async () => {
-      try {
-        const liste = await listOrganizationMembers();
-        if (!iptal) setUyeler(liste);
-      } catch (cause) {
-        if (!iptal) setHata(describeError(cause));
-      }
-    })();
-    return () => {
-      iptal = true;
-    };
-  }, []);
+    void yukle();
+  }, [yukle]);
 
   /**
    * Sunucudan dönen üyeyi listeye yazar.
@@ -56,16 +110,14 @@ export function MemberManager() {
    * değişikliği yapılmış gibi gösterebilir.
    */
   function guncelle(yeni: WireOrganizationMember) {
-    setUyeler((mevcut) =>
-      (mevcut ?? []).map((u) => (u.id === yeni.id ? yeni : u)),
-    );
+    setUyeler((mevcut) => (mevcut ?? []).map((u) => (u.id === yeni.id ? yeni : u)));
   }
 
-  async function ver(uye: WireOrganizationMember, rol: string) {
+  async function ver(uye: WireOrganizationMember, secilen: string) {
     setCalisan(uye.id);
     setHata(null);
     try {
-      guncelle(await grantOrganizationRole(uye.id, rol));
+      guncelle(await grantOrganizationRole(uye.id, secilen));
     } catch (cause) {
       setHata(describeError(cause));
     } finally {
@@ -73,14 +125,14 @@ export function MemberManager() {
     }
   }
 
-  async function al(uye: WireOrganizationMember, rol: string) {
+  async function al(uye: WireOrganizationMember, secilen: string) {
     setCalisan(uye.id);
     setHata(null);
     try {
-      guncelle(await revokeOrganizationRole(uye.id, rol));
+      guncelle(await revokeOrganizationRole(uye.id, secilen));
     } catch (cause) {
       // Kurumun SON sorumlusu kaldırılamaz; sunucu bunu 400 ile söylüyor ve
-      // mesajı olduğu gibi gösteriyoruz - kurum sorumlusuz kalırsa üye
+      // mesajı olduğu gibi gösteriyoruz — kurum sorumlusuz kalırsa üye
       // yönetimi tamamen kilitlenir.
       setHata(describeError(cause));
     } finally {
@@ -88,14 +140,16 @@ export function MemberManager() {
     }
   }
 
-  const gorunen = (uyeler ?? []).filter((u) => {
-    const q = arama.trim().toLocaleLowerCase("tr");
-    if (!q) return true;
-    return (
-      u.email.toLocaleLowerCase("tr").includes(q) ||
-      (u.full_name ?? "").toLocaleLowerCase("tr").includes(q)
-    );
-  });
+  // Aralik ve gezinme, SUNUCUNUN dondugu pencereden hesaplaniyor - kendi
+  // sayfa sayacimizdan degil. "Sonraki var mi" sorusunun en dogru cevabi
+  // "gosterdigim son kayit toplamdan kucuk mu": sunucu limiti kirpsa da,
+  // arada kayit silinse de dogru kalir.
+  const ilk = toplam === 0 ? 0 : pencere.offset + 1;
+  const son = pencere.offset + pencere.adet;
+  const sonrakiVar = son < toplam;
+  const oncekiVar = pencere.offset > 0;
+  const sayfaNo = Math.floor(pencere.offset / pencere.limit) + 1;
+  const sayfaAdedi = Math.max(1, Math.ceil(toplam / pencere.limit));
 
   return (
     <section
@@ -109,14 +163,30 @@ export function MemberManager() {
             Yalnızca kendi kurumunuzun üyelerini görür ve değiştirirsiniz.
           </p>
         </div>
-        <input
-          value={arama}
-          onChange={(e) => setArama(e.target.value)}
-          placeholder="E-posta ya da ad ara"
-          data-testid="member-search"
-          aria-label="Üye ara"
-          className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground"
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={rol}
+            onChange={(e) => setRol(e.target.value)}
+            data-testid="member-role-filter"
+            aria-label="Role göre filtrele"
+            className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground"
+          >
+            <option value="">Tüm roller</option>
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {ROLE_DEFINITIONS[r].label}
+              </option>
+            ))}
+          </select>
+          <input
+            value={arama}
+            onChange={(e) => setArama(e.target.value)}
+            placeholder="E-posta ya da ad ara"
+            data-testid="member-search"
+            aria-label="Üye ara"
+            className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground"
+          />
+        </div>
       </div>
 
       {hata ? (
@@ -129,20 +199,20 @@ export function MemberManager() {
         </p>
       ) : null}
 
-      {uyeler === null && !hata ? (
+      {uyeler === null ? (
         <p className="mt-4 text-sm text-muted">Yükleniyor…</p>
       ) : null}
 
-      {uyeler !== null && gorunen.length === 0 ? (
+      {uyeler !== null && uyeler.length === 0 && !hata ? (
         <p data-testid="member-empty" className="mt-4 text-sm text-muted">
-          {uyeler.length === 0
-            ? "Kurumda henüz üye yok. Hesap Aç bölümünden ekleyebilirsiniz."
-            : "Aramaya uyan üye yok."}
+          {rol || gecikmisArama
+            ? "Bu filtreye uyan üye yok."
+            : "Kurumda henüz üye yok. Hesap Aç bölümünden ekleyebilirsiniz."}
         </p>
       ) : null}
 
       <ul className="mt-4 flex flex-col gap-3">
-        {gorunen.map((uye) => (
+        {(uyeler ?? []).map((uye) => (
           <li
             key={uye.id}
             data-testid={`member-${uye.email}`}
@@ -156,23 +226,23 @@ export function MemberManager() {
             </div>
 
             <div className="mt-3 flex flex-wrap gap-2">
-              {ROLES.map((rol) => {
-                const sahip = uye.roles.includes(rol);
+              {ROLES.map((r) => {
+                const sahip = uye.roles.includes(r);
                 return (
                   <button
-                    key={rol}
+                    key={r}
                     type="button"
                     disabled={calisan === uye.id}
                     aria-pressed={sahip}
-                    data-testid={`member-${uye.email}-${rol}`}
-                    onClick={() => (sahip ? al(uye, rol) : ver(uye, rol))}
+                    data-testid={`member-${uye.email}-${r}`}
+                    onClick={() => (sahip ? al(uye, r) : ver(uye, r))}
                     className={`rounded-lg border px-3 py-1 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
                       sahip
                         ? "border-brand-300 bg-brand-50 text-brand-700"
                         : "border-border text-muted hover:border-brand-300 hover:text-brand-700"
                     }`}
                   >
-                    {ROLE_DEFINITIONS[rol].label}
+                    {ROLE_DEFINITIONS[r].label}
                   </button>
                 );
               })}
@@ -190,6 +260,42 @@ export function MemberManager() {
           </li>
         ))}
       </ul>
+
+      {toplam > 0 ? (
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+          {/* Kaçıncı kayıtlarda olduğunu YAZIYORUZ: yalnızca "önceki/sonraki"
+              göstermek, sorumlunun listenin neresinde olduğunu bilmesini
+              engeller ve aradığı kişiyi bulamadığında aramayı mı yoksa
+              sayfayı mı değiştireceğine karar veremez. */}
+          <p data-testid="member-range" className="text-xs text-muted">
+            {toplam} üyeden {ilk}–{son} arası
+            {yukleniyor ? " · yükleniyor…" : ""}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={!oncekiVar || yukleniyor}
+              onClick={() => setSayfa((s) => Math.max(0, s - 1))}
+              data-testid="member-prev"
+              className="rounded-lg border border-border px-3 py-1 text-xs font-semibold text-muted transition hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Önceki
+            </button>
+            <span data-testid="member-page" className="text-xs text-muted">
+              {sayfaNo} / {sayfaAdedi}
+            </span>
+            <button
+              type="button"
+              disabled={!sonrakiVar || yukleniyor}
+              onClick={() => setSayfa((s) => s + 1)}
+              data-testid="member-next"
+              className="rounded-lg border border-border px-3 py-1 text-xs font-semibold text-muted transition hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Sonraki
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

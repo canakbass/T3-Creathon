@@ -644,7 +644,8 @@ def test_ayni_eposta_ikinci_kurumda_sifresi_DEGISMIYOR(client, db_session, iki_k
 def test_uye_listesi_yalnizca_KENDI_kurumu(client, iki_kurum):
     r = client.get("/api/organizations/me/members", headers=iki_kurum["b_sorumlu"])
     assert r.status_code == 200, r.text[:200]
-    epostalar = {u["email"] for u in r.json()}
+    # Yanit artik SAYFALANMIS: {items, total, limit, offset}
+    epostalar = {u["email"] for u in r.json()["items"]}
     assert "b.hakem@cbu.edu.tr" in epostalar
     assert not any(e.endswith("@t3.org") for e in epostalar), epostalar
 

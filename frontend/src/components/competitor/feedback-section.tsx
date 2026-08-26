@@ -87,9 +87,13 @@ export function FeedbackSection({
       <p className={`mt-2 text-sm leading-relaxed ${styles.heading} opacity-80`}>{intro}</p>
 
       <ul className="mt-5 flex flex-col gap-4">
-        {points.map((point) => (
+        {/* Anahtar SIRA + baslik: maddeler AI ciktisindan turetiliyor ve
+            ayni baslik iki kez gelebilir. Basligi tek basina anahtar yapmak
+            yarismacinin geri bildirim maddelerinden birini kaybetmesi
+            demekti. */}
+        {points.map((point, sira) => (
           <li
-            key={point.title}
+            key={`${sira}-${point.title}`}
             className="rounded-xl border border-white/70 bg-white/80 px-4 py-3.5"
           >
             <h3 className="text-sm font-bold text-foreground">{point.title}</h3>

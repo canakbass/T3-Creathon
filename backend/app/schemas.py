@@ -74,6 +74,18 @@ class OrganizationMember(BaseModel):
     roles: List[str]
 
 
+class OrganizationMemberPage(BaseModel):
+    """Sayfalanmis uye listesi.
+
+    `total` FILTRE UYGULANDIKTAN SONRAKI sayidir: filtresiz toplami
+    dondurseydik "3 sonuc bulundu" yazip 40 sayfa gosterirdik.
+    """
+    items: List[OrganizationMember]
+    total: int
+    limit: int
+    offset: int
+
+
 class RoleGrant(BaseModel):
     role: str
 

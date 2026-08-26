@@ -64,10 +64,27 @@ export function AccountCreator({ teamId }: { teamId?: string | null }) {
   const [sonuclar, setSonuclar] = useState<Sonuc[] | null>(null);
   const [calisiyor, setCalisiyor] = useState(false);
 
-  const satirlar = epostalar
-    .split(/[\n,;]/)
-    .map((x) => x.trim())
-    .filter(Boolean);
+  // TEKRARLARI ELIYORUZ.
+  //
+  // Kullanicinin bildirdigi hata bundan cikiyordu:
+  //   "Encountered two children with the same key, 33232801068@gmail.com"
+  // Liste genelde Excel'den / KYS'den kopyalaniyor ve ayni adresin iki kez
+  // gecmesi olagan. Tekrar eden adres iki sonuc satiri uretiyor, React ayni
+  // anahtari iki kez goruyor ve satirlari birlestirip/atlayabiliyordu -
+  // yani yonetici acilan hesaplarin YANLIS listesini goruyordu. Ustelik
+  // ikinci istek zaten "bu e-posta zaten kayitli" hatasi alacakti.
+  //
+  // Bosluk da ayirici: gercek kullanimda liste bazen tek satirda bosluklarla
+  // yapistiriliyor ve e-posta adresi bosluk icermiyor.
+  const satirlar = Array.from(
+    new Map(
+      epostalar
+        .split(/[\n,;\s]+/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((x) => [x.toLowerCase(), x.toLowerCase()] as const),
+    ).values(),
+  );
 
   async function ac(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -208,9 +225,14 @@ export function AccountCreator({ teamId }: { teamId?: string | null }) {
           ) : null}
 
           <ul className="flex flex-col gap-1">
-            {sonuclar.map((s) => (
+            {sonuclar.map((s, sira) => (
               <li
-                key={s.eposta}
+                // Girdi zaten tekillestirildi, ama anahtari SIRA ile de
+                // birlestiriyoruz: sunucudan gelen bir sey (orn. normalize
+                // edilmis e-posta) ileride iki satiri esitlerse, ekran yine
+                // dogru kalsin. Anahtar tekrari sessiz bir hata - React
+                // satirlari birlestirir ve kimse fark etmez.
+                key={`${sira}-${s.eposta}`}
                 data-testid={`account-row-${s.eposta}`}
                 className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${
                   s.hata ? "border-rose-200 bg-rose-50" : "border-border"

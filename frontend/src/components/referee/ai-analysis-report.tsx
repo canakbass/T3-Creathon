@@ -68,9 +68,13 @@ export function AiAnalysisReport({ analysis }: AiAnalysisReportProps) {
               </div>
 
               <ul className="flex flex-col gap-1.5 border-t border-border pt-3">
-                {check.findings.map((finding) => (
+                {/* Anahtar SIRA + metin: bulgular AI'dan geliyor ve ayni
+                    cumle iki kez cikabilir (orn. iki bolumde ayni eksik
+                    baslik). Metni tek basina anahtar yapmak, hakemin
+                    bulgulardan birini HIC gormemesine yol acardi. */}
+                {check.findings.map((finding, sira) => (
                   <li
-                    key={finding}
+                    key={`${sira}-${finding}`}
                     className="flex gap-2 text-xs leading-relaxed text-muted"
                   >
                     <span aria-hidden="true" className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-slate-300" />
