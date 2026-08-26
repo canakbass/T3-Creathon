@@ -766,3 +766,55 @@ def test_kurum_bilgisi_her_role_acik(client, iki_kurum):
         assert r.status_code == 200, (rol, r.text[:200])
         assert r.json()["id"] == "org-cbu"
         assert r.json()["name"]
+
+
+def test_rol_kapisi_kurum_kapisindan_ONCE_ama_KAHIN_DEGIL(client, iki_kurum):
+    """/rationale-draft yalnizca hakeme acik ve ROL kapisi KURUM kapisindan
+    once calisiyor: yonetici ile denenirse kurum kapisina hic ulasilmiyor.
+
+    BU BIR SIZINTI DEGIL ve bu test onu KILITLIYOR: rol reddi, raporun var
+    olup olmadigi hakkinda hicbir sey soylememeli. Kendi kurumundaki rapor,
+    yabanci kurumun raporu ve hic olmayan bir kimlik icin CEVAP AYNI olmali.
+    Biri digerinden ayrilirsa, rol kapisi farkinda olmadan bir varlik kahini
+    haline gelir.
+    """
+    yonetici = iki_kurum["b_yonetici"]
+
+    # B kurumunun KENDI raporu
+    yar_b = client.post(
+        "/api/competitions",
+        json={"name": "B Yarışması", "category_label": "Vize"},
+        headers=yonetici,
+    ).json()["id"]
+    client.put(
+        f"/api/competitions/{yar_b}/template",
+        json={"required_headings": ["Özgünlük"], "min_pages": 1, "max_pages": 80},
+        headers=yonetici,
+    )
+    client.put(
+        f"/api/competitions/{yar_b}/criteria",
+        json={"criteria": [{"title": "Özgünlük", "weight": 100}]},
+        headers=yonetici,
+    )
+    client.put(f"/api/competitions/{yar_b}/status", json={"status": "open"}, headers=yonetici)
+    kendi = client.post(
+        "/api/reports/upload",
+        data={"project_name": "B Raporu", "competition_id": yar_b, "team_id": "takim-b"},
+        files={"file": ("b.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
+        headers=yonetici,
+    )
+    assert kendi.status_code == 201, kendi.text[:200]
+
+    hedefler = {
+        "kendi kurumu": kendi.json()["id"],
+        "yabanci kurum": iki_kurum["rapor_id"],
+        "hic olmayan": "RPT-0000-XXXXXX",
+    }
+    yanitlar = {
+        ad: client.post(f"/api/reports/{rid}/rationale-draft", headers=yonetici)
+        for ad, rid in hedefler.items()
+    }
+    durumlar = {ad: r.status_code for ad, r in yanitlar.items()}
+    govdeler = {r.json().get("detail") for r in yanitlar.values()}
+    assert set(durumlar.values()) == {403}, durumlar
+    assert len(govdeler) == 1, f"rol reddi raporun varligini sizdiriyor: {govdeler}"

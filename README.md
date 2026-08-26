@@ -48,9 +48,48 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
    **gösterilmez**.
 6. **Değerlendirme Yöneticisi** tamamlanma oranını izler.
 
-**Çok rollü test hesabı:** `asdfghjkl@gmail.com` / `asdfghjkl` — dört rolün
-hepsine sahip. Girişte rol seçim ekranı çıkar; tek hesapla tüm akış
-denenebilir.
+**Çok rollü test hesabı:** `asdfghjkl@gmail.com` / `asdfghjkl` — beş rolün
+hepsine sahip. Girişte **kurum + rol** seçim ekranı çıkar; tek hesapla tüm
+akış denenebilir.
+
+### Kurumlar (çok kiracılık)
+
+Sistem tek kurumluk değil. Her yarışma, rapor, takım ve kullanıcı rolü bir
+**kuruma** ait; bir kurumdaki kişi başka kurumun hiçbir kaydını göremez.
+
+Bu, "TEKNOFEST'e özel" olmaktan çıkmanın önkoşuluydu: aynı yazılım bir
+üniversitede ödev değerlendirmek, bir şirkette işe alım başvurusu elemek
+için de kullanılabilsin isteniyor — ama o kullanımlar birbirinin verisini
+görmemeli.
+
+**Aynı e-posta birden fazla kurumda olabilir** ve rolleri kuruma göre
+değişir: aynı kişi TEKNOFEST'te hakem, kendi üniversitesinde ödev
+değerlendiren öğretim elemanı olabilir. Bu yüzden rol tek başına bir kimlik
+değil — "hakem" değil, "T3 Vakfı'nda hakem". Token hem rolü hem kurumu
+taşıyor ve ikisi birlikte seçiliyor.
+
+**Kurum Sorumlusu (`ORG_OWNER`)** şartnamedeki dört role sonradan eklendi.
+Dört rol "bu kurumda kim ne yapar" sorusunu cevaplıyordu ama "bu kurumda
+**kim var**" sorusunu kimse cevaplamıyordu; sonuçta hesap açma yetkisi
+yarışma yöneticisindeydi ve her yönetici sınırsız yönetici üretebiliyordu.
+Kurum sorumlusu kendi kurumunun üyelerini ve rollerini yönetir, kendi
+kurumunda her rolü seçebilir — ama başka bir kurumun tek kaydını bile
+göremez.
+
+Yeni kurum açmak bir API ucu **değil** (`scripts/kurum-ac.py`): uç nokta
+olsaydı hesabı olan herkes kendini sorumlu yaptığı yeni bir kiracı
+üretebilirdi.
+
+```fish
+cd backend
+../.venv/bin/python ../scripts/kurum-ac.py \
+    --slug ege-uni --ad "Ege Üniversitesi" --sorumlu dekan@ege.edu.tr
+```
+
+Demo verisinde iki kurum var — **T3 Vakfı** (`@teknofest.org` hesapları) ve
+**Manisa CBÜ** (`sorumlu@` / `ogretim@` / `asistan@` / `ogrenci@cbu.edu.tr`,
+şifre `parola123`). Tek kurumla "A kurumu B'yi göremiyor" kuralı hiç
+sınanamaz; yalıtımı denemek için karşı tarafta gerçek hesaplar gerekiyor.
 
 ### Yarışma aşamaları
 
@@ -200,9 +239,9 @@ tutarsızlık bitti, tüm AI çıktıları da Türkçe.
   uç nokta yok (`POST /api/criteria` farklı bir şema bekliyor: tek kriter,
   `category_id`+`title`+`max_score`). Bu MVP maddesi değil, o yüzden
   dokunmadım.
-- Yarışmacının **kendi** raporunu yükleyebileceği bir ekran yok; yükleme
-  yalnızca Yarışma Yöneticisi panelinde. Backend her iki role de izin
-  veriyor (`RoleChecker(["COMPETITION_MANAGER", "COMPETITOR"])`).
+- Yarışmacı rapor **yükleyemez**, yalnızca sonucunu sorgular. Yükleme
+  yöneticide: raporun sonucunu takım üyeliği belirliyor ve üyeliğin doğru
+  kişiye ait olduğuna yalnızca yönetici kefil olabilir.
 
 ## TEKNOFEST'in gerçek yapısına uyum (2026-08-26)
 
@@ -472,8 +511,13 @@ Seed kullanıcıları (ilk açılışta oluşur, şifreleri `password123`):
 Bu hesaplar seed'den geliyor. Yeni hesaplar **yönetici panelinden** açılıyor
 ("Hesap Aç" bölümü) — kendi kendine kayıt kapalı.
 
-Çok rollü test hesabı: `asdfghjkl@gmail.com` / `asdfghjkl` — dört rolün
-hepsi, girişte rol seçim ekranı çıkar.
+Çok rollü test hesabı: `asdfghjkl@gmail.com` / `asdfghjkl` — beş rolün
+hepsi (kurum sorumlusu dahil), girişte kurum + rol seçim ekranı çıkar.
+
+**İkinci kurum (Manisa CBÜ), şifre `parola123`:** `sorumlu@cbu.edu.tr`
+(kurum sorumlusu), `ogretim@cbu.edu.tr` (yönetici), `asistan@cbu.edu.tr`
+(hakem), `ogrenci@cbu.edu.tr` (yarışmacı). Bu hesaplar T3 Vakfı'nda **hiçbir
+role sahip değil** — kurumlar arası yalıtım bunlarla denenir.
 
 Takım kurgusu bilinçli, üç kuralı birden gösteriyor: `competitor2@`
 kendi yüklemediği (yöneticinin aktardığı) Glieser raporunu **görebilir**;
@@ -486,14 +530,16 @@ rapor yüklerken **hangi takım adına** yüklediğini seçmek zorundadır.
 |---|---|
 | `ai-doc-analysis` | 46 başarılı, 0 başarısız |
 | `ai-scoring` | 102 başarılı, 0 başarısız |
-| `backend` (pytest) | 93 başarılı, 0 başarısız |
-| `frontend` (jest) | 123 başarılı, 0 başarısız |
-| `scripts/e2e-test.py` (canlı sunucu) | 48 başarılı, 0 başarısız |
+| `backend` (pytest) | 132 başarılı, 0 başarısız |
+| `frontend` (jest) | 130 başarılı, 0 başarısız |
+| `scripts/e2e-test.py` (canlı sunucu) | 61 başarılı, 0 başarısız |
 | `frontend` (next build) | başarılı |
 | Uçtan uca — API akışı | 40 başarılı, 0 başarısız |
 | Uçtan uca — arayüz istek şekilleri (canlı backend) | 32 başarılı, 0 başarısız |
 
-Uçtan uca testte doğrulananlar: 4 rolün girişi, gerçek PDF yükleme, dört
+Uçtan uca testte doğrulananlar: kurumlar arası yalıtım (bir kurumun
+yöneticisi diğerinin raporunu, yarışmasını, hakem listesini ve göstergesini
+göremiyor), 5 rolün girişi, gerçek PDF yükleme, dört
 analizin veri tabanına yazılması, hakemin AI önerisini ezip nihai karar
 vermesi, rol bazlı yetkilendirme (yarışmacı karar veremiyor, kendi raporundan
 başkasını göremiyor), ve saldırgan vakalar: birebir kopyalanmış rapor %100

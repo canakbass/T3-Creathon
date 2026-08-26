@@ -564,6 +564,125 @@ def main():
             any("karşılaştırma dışı" in x for x in b2.get("findings", [])),
         )
 
+    # --------------------------------------------------- kurumlar arasi
+    bolum("Kurumlar arasi yalitim")
+    #
+    # NEDEN CANLI SUNUCUDA DA DENIYORUZ: birim testleri kendi veri tabanini
+    # kuruyor ve kurum alanlarini elle dolduruyor. Burada seed'den gelen
+    # GERCEK iki kurum var; "alanlar dogru dolduruluyor mu" sorusunu ancak
+    # gercek akis cevapliyor.
+    def _kurum_giris(eposta, sifre, scope=None):
+        veri = {"username": eposta, "password": sifre}
+        if scope:
+            veri["scope"] = scope
+        j = c.post("/api/auth/login", data=veri).json()
+        return j, {"Authorization": f"Bearer {j['access_token']}"}
+
+    cbu_giris, cbu_yonetici = _kurum_giris("ogretim@cbu.edu.tr", "parola123")
+    _, cbu_sorumlu = _kurum_giris("sorumlu@cbu.edu.tr", "parola123")
+    _, cbu_hakem = _kurum_giris("asistan@cbu.edu.tr", "parola123")
+    kontrol(
+        "ikinci kurumun yoneticisi kendi kurumunda",
+        cbu_giris.get("active_organization_id") == "org-cbu",
+        str(cbu_giris.get("active_organization_id")),
+    )
+
+    # T3'un raporu CBU'ya GORUNMEMELI - uc uc nokta da AYNI cevabi vermeli.
+    # Biri 403 digeri 404 dondurse, saldirgan ikisini karsilastirarak baska
+    # kurumun rapor kimliklerini dogrulardi (varlik kahini).
+    #
+    # HAKEM TOKENI kullaniyoruz, yonetici degil: /rationale-draft yalnizca
+    # hakeme acik ve ROL kapisi KURUM kapisindan ONCE calisiyor. Yonetici
+    # ile denenirse "'COMPETITION_MANAGER' rolu bu islemi yapamaz" (403)
+    # doner ve kurum kapisina hic ulasilmaz.
+    #
+    # BU BIR SIZINTI DEGIL: o 403, raporun VAR OLUP OLMADIGI hakkinda hicbir
+    # sey soylemiyor - kendi kurumundaki bir rapor icin de, hic olmayan bir
+    # kimlik icin de aynisini doner. Kurum kapisina ULASABILEN her rol icin
+    # cevabin ayni olmasi onemli olan; sinanan da bu.
+    yanitlar = [
+        c.get(f"/api/reports/{rapor_id}", headers=cbu_hakem),
+        c.get(f"/api/reports/{rapor_id}/file", headers=cbu_hakem),
+        c.post(f"/api/reports/{rapor_id}/rationale-draft", headers=cbu_hakem),
+    ]
+    kontrol(
+        "yabanci kurumun raporu 404 (403 DEGIL)",
+        all(r.status_code == 404 for r in yanitlar),
+        str([r.status_code for r in yanitlar]),
+    )
+    kontrol(
+        "uc uc nokta BIREBIR ayni cevabi veriyor",
+        len({r.json().get("detail") for r in yanitlar}) == 1,
+        str({r.json().get("detail") for r in yanitlar}),
+    )
+    kontrol(
+        "yabanci kurum listede yok",
+        all(
+            x["id"] != rapor_id
+            for x in c.get("/api/reports", headers=cbu_yonetici).json()
+        ),
+    )
+    # Arama bir LISTE ucu: 403 "bu kayit var ama senin degil" demek olurdu ve
+    # e-posta anahtariyla birlesince baska kurumun katilimci listesini
+    # sizdiran bir kahine donusurdu.
+    arama = c.get(
+        "/api/reports/lookup", params={"report_id": rapor_id}, headers=cbu_yonetici
+    )
+    kontrol(
+        "arama yabanci kurumda 200 + bos liste",
+        arama.status_code == 200 and arama.json() == [],
+        f"HTTP {arama.status_code} {arama.text[:60]}",
+    )
+
+    # Yarismanin KURALLARINI degistirmek: en agir bulgu buydu. Kriter
+    # agirliklarini degistirmek o yarismanin puanlama rubrigini degistirmek,
+    # yani baska bir kurumun degerlendirme sonuclarini disaridan bozmak.
+    saldirilar = [
+        c.put(
+            f"/api/competitions/{yar_id}/criteria",
+            json={"criteria": [{"title": "Ele Gecirildi", "weight": 100}]},
+            headers=cbu_yonetici,
+        ),
+        c.put(
+            f"/api/competitions/{yar_id}/status",
+            json={"status": "draft"},
+            headers=cbu_yonetici,
+        ),
+    ]
+    kontrol(
+        "yabanci kurumun yarismasi DEGISTIRILEMIYOR",
+        all(r.status_code == 404 for r in saldirilar),
+        str([r.status_code for r in saldirilar]),
+    )
+
+    # Hakem rehberi: bu liste ad-soyad ve E-POSTA donduruyor.
+    cbu_hakemler = {
+        h["email"] for h in c.get("/api/assignments/referees", headers=cbu_yonetici).json()
+    }
+    kontrol(
+        "hakem listesi kurumla sinirli",
+        not any(e.endswith("@test.org") or "teknofest" in e for e in cbu_hakemler),
+        str(cbu_hakemler),
+    )
+
+    # Gosterge sayaclari: sayacin ARTISI baska kurumun hareketini ele verir.
+    kontrol(
+        "gosterge yabanci raporu saymiyor",
+        c.get("/api/dashboard/stats", headers=cbu_yonetici).json()["total_reports"] == 0,
+    )
+
+    # Uye yonetimi: kurumun tum e-posta rehberi, yalnizca sorumluya acik.
+    cbu_uyeler = c.get("/api/organizations/me/members", headers=cbu_sorumlu).json()
+    kontrol(
+        "uye listesi yalnizca kendi kurumu",
+        all(u["email"].endswith("@cbu.edu.tr") for u in cbu_uyeler),
+        str([u["email"] for u in cbu_uyeler])[:100],
+    )
+    kontrol(
+        "uye listesi yoneticiye KAPALI",
+        c.get("/api/organizations/me/members", headers=cbu_yonetici).status_code == 403,
+    )
+
     print(f"\n{'=' * 52}\n{gecti} gecti, {kaldi} kaldi")
     return 1 if kaldi else 0
 
