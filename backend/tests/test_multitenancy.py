@@ -125,9 +125,17 @@ def iki_kurum(client, db_session):
     )
     assert yukleme.status_code == 201, yukleme.text[:200]
 
+    # Her kurumun bir sorumlusu: uye yonetimini yalnizca o yapabiliyor.
+    _kullanici_kur(db_session, "a.sorumlu@t3.org", "org-t3", "ORG_OWNER")
+    _kullanici_kur(db_session, "b.sorumlu@cbu.edu.tr", "org-cbu", "ORG_OWNER")
+    a_sorumlu, _ = _giris(client, "a.sorumlu@t3.org")
+    b_sorumlu, _ = _giris(client, "b.sorumlu@cbu.edu.tr")
+
     return {
         "a_yonetici": a_yonetici,
+        "a_sorumlu": a_sorumlu,
         "b_yonetici": b_yonetici,
+        "b_sorumlu": b_sorumlu,
         "b_hakem": b_hakem,
         "b_yarismaci": b_yarismaci,
         "yar_id": yar,
@@ -513,3 +521,248 @@ def test_kategori_listesi_kurumla_sinirli(client, iki_kurum):
         k["name"] for k in client.get("/api/categories", headers=iki_kurum["b_yonetici"]).json()
     }
     assert "AI & Machine Learning" not in adlar, adlar
+
+
+# --- C maddesi: "rastgele hakem hesabi actim herkesin verisini okuyorum" --
+
+def test_acilan_hesap_ACANIN_kurumuna_dusuyor(client, db_session, iki_kurum):
+    """Onceden hesap her zaman VARSAYILAN kuruma (org-t3) aciliyordu.
+
+    Yani B kurumunun yoneticisi A kurumuna hakem hesabi aciyordu ve o hesap
+    A kurumunun butun raporlarini okuyabiliyordu. Kullanicinin tarif ettigi
+    durumun birebir kendisi.
+    """
+    from app import models
+
+    r = client.post(
+        "/api/auth/users",
+        json={"email": "yeni.hakem@cbu.edu.tr", "roles": ["REFEREE"]},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 201, r.text[:200]
+
+    kullanici = (
+        db_session.query(models.User)
+        .filter(models.User.email == "yeni.hakem@cbu.edu.tr")
+        .first()
+    )
+    assert kullanici.roles_in("org-cbu") == ["REFEREE"]
+    assert kullanici.roles_in("org-t3") == [], "hesap YABANCI kuruma dustu"
+
+    # Ve o hesapla A kurumunun raporu gorunmuyor
+    tok, _ = _giris(client, "yeni.hakem@cbu.edu.tr", r.json()["temporary_password"])
+    assert (
+        client.get(f"/api/reports/{iki_kurum['rapor_id']}", headers=tok).status_code == 404
+    )
+
+
+def test_yonetici_YONETICI_uretemiyor(client, iki_kurum):
+    """Yetki YUKARI DOGRU dagitilamaz.
+
+    Onceden her yarisma yoneticisi sinirsiz yonetici uretebiliyordu; tek bir
+    yonetici hesabi ele gecirildiginde saldirgan kendine kalici yetki
+    basabilir, hatta kurumu tamamen ele gecirebilirdi.
+    """
+    for rol in ("COMPETITION_MANAGER", "EVALUATION_MANAGER", "ORG_OWNER"):
+        r = client.post(
+            "/api/auth/users",
+            json={"email": f"sahte.{rol.lower()}@cbu.edu.tr", "roles": [rol]},
+            headers=iki_kurum["b_yonetici"],
+        )
+        assert r.status_code == 403, f"{rol} uretildi (HTTP {r.status_code})"
+        assert "ORG_OWNER" in r.json()["detail"]
+
+
+def test_kurum_sorumlusu_yonetici_urretebiliyor(client, iki_kurum):
+    """Kilit fazla siki olmamali: sorumlu ekibini kurabilmeli."""
+    r = client.post(
+        "/api/auth/users",
+        json={"email": "yeni.yonetici@cbu.edu.tr", "roles": ["COMPETITION_MANAGER"]},
+        headers=iki_kurum["b_sorumlu"],
+    )
+    assert r.status_code == 201, r.text[:200]
+    assert r.json()["roles"] == ["COMPETITION_MANAGER"]
+
+
+def test_yabanci_kurumun_takimina_uye_EKLENEMIYOR(client, iki_kurum):
+    """Eklenen kisi o takimin BUTUN basvuru sonuclarini gorurdu."""
+    r = client.post(
+        "/api/auth/users",
+        json={"email": "sizinti@cbu.edu.tr", "roles": ["COMPETITOR"], "team_id": "takim-a"},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 404, f"yabanci takima uye eklendi (HTTP {r.status_code})"
+
+
+def test_ayni_eposta_ikinci_kurumda_sifresi_DEGISMIYOR(client, db_session, iki_kurum):
+    """"hem TEKNOFEST yarismasi icin hem de odev kontrolu icin ayni maile
+    bagliysam?" - cevap: ayni hesap, yeni kurumda yeni uyelik.
+
+    Yeni hesap acilsa iki ayri sifre olurdu (ayni e-posta iki kayit).
+    Mevcut sifre DEGISTIRILSE, bir kurumun yoneticisi o kisinin baska
+    kurumdaki oturumunu dusurebilirdi - kurumlar arasi bir saldiri.
+    """
+    from app import models
+
+    onceki = (
+        db_session.query(models.User)
+        .filter(models.User.email == "a.yarismaci@t3.org")
+        .first()
+        .password_hash
+    )
+
+    r = client.post(
+        "/api/auth/users",
+        json={"email": "a.yarismaci@t3.org", "roles": ["COMPETITOR"]},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 201, r.text[:200]
+    assert r.json()["temporary_password"] is None
+    assert r.json()["roles"] == ["COMPETITOR"]  # YALNIZCA bu kurumdaki roller
+
+    db_session.expire_all()
+    kullanici = (
+        db_session.query(models.User)
+        .filter(models.User.email == "a.yarismaci@t3.org")
+        .first()
+    )
+    assert kullanici.password_hash == onceki, "baska kurumun sifresi degistirildi"
+    assert set(kullanici.roles_in("org-t3")) == {"COMPETITOR"}
+    assert set(kullanici.roles_in("org-cbu")) == {"COMPETITOR"}
+
+    # Kendi kurumunda ikinci kez eklenirse hata
+    r = client.post(
+        "/api/auth/users",
+        json={"email": "a.yarismaci@t3.org", "roles": ["COMPETITOR"]},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 400
+
+
+# --- Kurum sorumlusu: kendi kurumu, YALNIZCA kendi kurumu ---------------
+
+def test_uye_listesi_yalnizca_KENDI_kurumu(client, iki_kurum):
+    r = client.get("/api/organizations/me/members", headers=iki_kurum["b_sorumlu"])
+    assert r.status_code == 200, r.text[:200]
+    epostalar = {u["email"] for u in r.json()}
+    assert "b.hakem@cbu.edu.tr" in epostalar
+    assert not any(e.endswith("@t3.org") for e in epostalar), epostalar
+
+
+def test_uye_listesi_yoneticiye_KAPALI(client, iki_kurum):
+    """Bu liste kurumun tum e-posta rehberi; yonetici hesabi ele geciren biri
+    once rehberi indirir, sonra hedefli saldiriya gecerdi."""
+    assert (
+        client.get("/api/organizations/me/members", headers=iki_kurum["b_yonetici"]).status_code
+        == 403
+    )
+
+
+def test_sorumlu_YABANCI_kurumun_uyesine_rol_veremiyor(client, db_session, iki_kurum):
+    """Kurumun uyesi olmayan "yok"tur: ayri bir mesaj donseydi sorumlu
+    rastgele kimlikler deneyerek sistemdeki tum hesaplari sayabilirdi."""
+    from app import models
+
+    a_hakem_id = (
+        db_session.query(models.User)
+        .filter(models.User.email == "a.yarismaci@t3.org")
+        .first()
+        .id
+    )
+    r = client.post(
+        f"/api/organizations/me/members/{a_hakem_id}/roles",
+        json={"role": "COMPETITION_MANAGER"},
+        headers=iki_kurum["b_sorumlu"],
+    )
+    assert r.status_code == 404, f"HTTP {r.status_code}"
+    # Ve gercekten verilmemis olmali
+    db_session.expire_all()
+    kullanici = db_session.query(models.User).filter(models.User.id == a_hakem_id).first()
+    assert kullanici.roles_in("org-t3") == ["COMPETITOR"]
+    assert kullanici.roles_in("org-cbu") == []
+
+
+def test_sorumlu_kendi_kurumunda_rol_verip_alabiliyor(client, db_session, iki_kurum):
+    from app import models
+
+    hakem_id = (
+        db_session.query(models.User)
+        .filter(models.User.email == "b.hakem@cbu.edu.tr")
+        .first()
+        .id
+    )
+    r = client.post(
+        f"/api/organizations/me/members/{hakem_id}/roles",
+        json={"role": "COMPETITION_MANAGER"},
+        headers=iki_kurum["b_sorumlu"],
+    )
+    assert r.status_code == 201, r.text[:200]
+    assert set(r.json()["roles"]) == {"REFEREE", "COMPETITION_MANAGER"}
+
+    r = client.delete(
+        f"/api/organizations/me/members/{hakem_id}/roles/COMPETITION_MANAGER",
+        headers=iki_kurum["b_sorumlu"],
+    )
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["roles"] == ["REFEREE"]
+
+
+def test_kurumun_SON_sorumlusu_kaldirilamiyor(client, db_session, iki_kurum):
+    """Kurum sorumlusuz kalirsa uye yonetimi kilitlenir ve kurtarmanin API
+    yolu yoktur - veri tabanina elle girmek gerekir. Tek bir yanlis
+    tiklamayla ulasilabilecek bir durum olmamali."""
+    from app import models
+
+    sorumlu_id = (
+        db_session.query(models.User)
+        .filter(models.User.email == "b.sorumlu@cbu.edu.tr")
+        .first()
+        .id
+    )
+    r = client.delete(
+        f"/api/organizations/me/members/{sorumlu_id}/roles/ORG_OWNER",
+        headers=iki_kurum["b_sorumlu"],
+    )
+    assert r.status_code == 400, f"kurum sorumlusuz kaldi (HTTP {r.status_code})"
+    assert "son sorumlusu" in r.json()["detail"].lower()
+
+
+def test_sorumlu_kendi_kurumunda_HER_ROLE_bakabiliyor(client, iki_kurum):
+    """"bu superuserlar her role bakabilmeli."
+
+    Taviz DEGIL: sorumlu o rolu kendine zaten verebiliyor, engellemek
+    yalnizca iki fazladan tiklama saglardi. Onemli olan, secilen rolle
+    yapilan isteklerin GERCEKTEN calismasi - token dogrulamasi bunu
+    reddederse secim ekrani calisir gorunup sistem kullanilamaz olurdu.
+    """
+    tok = iki_kurum["b_sorumlu"]
+    r = client.post(
+        "/api/auth/select-role",
+        json={"role": "COMPETITION_MANAGER", "organization_id": "org-cbu"},
+        headers=tok,
+    )
+    assert r.status_code == 200, r.text[:200]
+    yonetici_tok = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    # Yonetici rolu gerektiren bir uc nokta gercekten calisiyor mu
+    assert client.get("/api/dashboard/stats", headers=yonetici_tok).status_code == 200
+
+
+def test_sorumlu_BASKA_kurumda_rol_secemiyor(client, iki_kurum):
+    """Sinir aynen duruyor: "superuser" sifati kurum sinirini asmanin
+    anahtari degil."""
+    r = client.post(
+        "/api/auth/select-role",
+        json={"role": "COMPETITION_MANAGER", "organization_id": "org-t3"},
+        headers=iki_kurum["b_sorumlu"],
+    )
+    assert r.status_code == 403, f"HTTP {r.status_code}"
+
+
+def test_kurum_bilgisi_her_role_acik(client, iki_kurum):
+    """Kullanici hangi kurum adina islem yaptigini her an gormeli - yanlis
+    kurumda islem yapmak baska bir kurumun verisine dokunmak demek."""
+    for rol in ("b_hakem", "b_yarismaci", "b_yonetici", "b_sorumlu"):
+        r = client.get("/api/organizations/me", headers=iki_kurum[rol])
+        assert r.status_code == 200, (rol, r.text[:200])
+        assert r.json()["id"] == "org-cbu"
+        assert r.json()["name"]

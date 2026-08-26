@@ -42,8 +42,40 @@ class CreatedUser(BaseModel):
     roles: List[str]
     team_id: Optional[str] = None
     # YALNIZCA BU YANITTA doner; veri tabaninda yalnizca bcrypt ozeti var.
-    temporary_password: str
+    #
+    # BOS olabilir: e-posta baska bir kurumda zaten kayitliysa yeni hesap
+    # acilmiyor, o kuruma UYELIK ekleniyor - ve mevcut sifre degistirilmiyor
+    # (degistirilse, bir kurumun yoneticisi o kisinin baska kurumdaki
+    # oturumunu dusurebilirdi).
+    temporary_password: Optional[str] = None
     notice: str
+
+
+class OrganizationResponse(BaseModel):
+    """Kullanicinin HANGI KURUM ADINA calistigi.
+
+    Arayuz bunu her ekranda gostermeli: yanlis kurumda islem yapmak, baska
+    bir kurumun verisine dokunmak demek.
+    """
+    id: str
+    name: str
+    slug: str
+    my_roles: List[str]
+    member_count: int
+
+
+class OrganizationMember(BaseModel):
+    id: str
+    email: EmailStr
+    full_name: Optional[str] = None
+    # BU KURUMDAKI roller. Ayni kisinin baska kurumdaki rolleri burada
+    # GORUNMEZ - gorunsse bir kurumun sorumlusu, uyesinin baska kurumlardaki
+    # konumunu ogrenirdi.
+    roles: List[str]
+
+
+class RoleGrant(BaseModel):
+    role: str
 
 
 class UserLogin(BaseModel):

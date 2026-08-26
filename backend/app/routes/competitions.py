@@ -45,7 +45,7 @@ from ..services import ai
 
 router = APIRouter(prefix="/api/competitions", tags=["Competitions"])
 
-_YONETICI = auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+_YONETICI = auth.RoleChecker(list(models.YONETICI_ROLLERI))
 
 # Yarismanin gecebilecegi asamalar ve siralamasi.
 ASAMALAR = ("draft", "open", "closed", "evaluating", "completed")

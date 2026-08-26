@@ -6,7 +6,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from .. import models, schemas, auth
+from .. import models, schemas, auth, tenancy
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
@@ -29,9 +29,9 @@ def _kendi_kaydi_acik() -> bool:
     return os.getenv("SELF_REGISTRATION", "0").strip().lower() in ("1", "true", "evet")
 
 
-# Kullanici-kurum uyeligi tokene girene kadar yeni hesaplarin baglanacagi
-# kurum. Token kurumu tasimaya basladiginda burasi cagiranin AKTIF kurumu
-# olacak - govdeden ASLA alinmayacak.
+# Kendi kendine kayit (SELF_REGISTRATION=1) acikken yeni hesaplarin
+# baglanacagi kurum. Yonetici acilan hesaplarda ARTIK KULLANILMIYOR - orada
+# kurum cagiranin aktif kurumundan geliyor.
 VARSAYILAN_KURUM_SLUG = "t3-vakfi"
 
 
@@ -42,6 +42,27 @@ def _varsayilan_kurum_id(db: Session):
         .first()
     )
     return kurum.id if kurum else None
+
+
+def _secim_gecerli(user: models.User, kurum, rol: str) -> bool:
+    """(kurum, rol) cifti bu kullanici icin secilebilir mi?
+
+    KURUM SORUMLUSU KENDI KURUMUNDA HER ROLU SECEBILIR. Kullanicinin istegi
+    buydu: "bu superuserlar her role bakabilmeli". Bu bir taviz DEGIL, cunku
+    sorumlu o rolu kendine zaten verebiliyor (POST /me/members/.../roles);
+    engellemek guvenlik degil yalnizca fazladan iki tiklama saglardi.
+    Kararlarda kimin imzasi oldugu degismiyor - karar kaydi kullanici
+    kimligini tutuyor, rolu degil.
+
+    SINIR AYNEN DURUYOR: yalnizca ORG_OWNER OLDUGU kurumda. Baska kurumda
+    hicbir sey secemez.
+    """
+    uyelikler = user.memberships
+    if (kurum, rol) in [
+        (u["organization_id"], r) for u in uyelikler for r in u["roles"]
+    ]:
+        return True
+    return rol in models.ROLLER and "ORG_OWNER" in user.roles_in(kurum)
 
 
 def _uret_sifre() -> str:
@@ -139,7 +160,7 @@ def create_user(
     govde: schemas.AdminUserCreate,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(
-        auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+        auth.RoleChecker(list(models.YONETICI_ROLLERI))
     ),
 ):
     """Yonetici bir kullanici hesabi acar; sifreyi SISTEM uretir.
@@ -157,12 +178,24 @@ def create_user(
     saklanir - bir daha okunamaz. Kaybolursa yeni hesap degil, sifre
     sifirlama gerekir.
     """
-    eposta = govde.email.strip().lower()
-    if db.query(models.User).filter(models.User.email == eposta).first():
+    # KURUM CAGIRANIN AKTIF KURUMU. Onceden `_varsayilan_kurum_id(db)`
+    # kullaniliyordu, yani B kurumunun yoneticisi A kurumuna kullanici
+    # aciyordu - kullanicinin tarif ettigi durumun birebir kendisi:
+    # "rastgele hakem hesabi actim herkesin verisini okuyabilir hale
+    # geliyorum". Govdeden de ALMIYORUZ: alinsa "baska kuruma kullanici
+    # acma" ucu olurdu.
+    kurum = tenancy.aktif_kurum(current_user)
+    if kurum is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Bu e-posta adresi zaten kayitli.",
+            detail=(
+                "Hangi kurum adina hesap acildigi belirsiz. Cikip tekrar giris "
+                "yapin (kurum secimi token'da tasiniyor)."
+            ),
         )
+
+    eposta = govde.email.strip().lower()
+    mevcut = db.query(models.User).filter(models.User.email == eposta).first()
 
     gecersiz = [r for r in govde.roles if r not in models.ROLLER]
     if gecersiz:
@@ -170,6 +203,49 @@ def create_user(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Gecersiz rol: {', '.join(gecersiz)}.",
         )
+
+    # YETKI YUKARI DOGRU DAGITILAMAZ. Onceden her yarisma yoneticisi
+    # sinirsiz yonetici uretebiliyordu; tek bir yonetici hesabi ele
+    # gecirildiginde saldirgan kendine kalici yetki basabilirdi.
+    ayricalikli = [r for r in govde.roles if r in models.AYRICALIKLI_ROLLER]
+    if ayricalikli and getattr(current_user, "active_role", None) != "ORG_OWNER":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"{', '.join(ayricalikli)} rolunu yalnizca kurum sorumlusu "
+                "(ORG_OWNER) verebilir."
+            ),
+        )
+
+    # AYNI E-POSTA BASKA BIR KURUMDA OLABILIR. Kullanicinin sordugu durum:
+    # "hem TEKNOFEST yarismasi icin hem de odev sonucu kontrolu icin ayni
+    # maile bagliysam?" Cevap: ayni hesap, yeni kurumda yeni bir uyelik.
+    # Yeni hesap acmiyoruz (o zaman iki ayri sifre olurdu) ve mevcut sifreyi
+    # de DEGISTIRMIYORUZ - baska bir kurumun yoneticisi, o kisinin baska
+    # kurumdaki oturumunu dusurebilirdi.
+    if mevcut is not None:
+        if mevcut.roles_in(kurum):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Bu e-posta adresi bu kurumda zaten kayitli.",
+            )
+        _rol_ver(db, mevcut, govde.roles, kurum)
+        takim_id = _takima_ekle(db, mevcut, govde, kurum)
+        db.commit()
+        db.refresh(mevcut)
+        return {
+            "id": mevcut.id,
+            "email": mevcut.email,
+            "full_name": mevcut.full_name,
+            "roles": mevcut.roles_in(kurum),
+            "team_id": takim_id,
+            "temporary_password": None,
+            "notice": (
+                "Bu e-posta baska bir kurumda zaten kayitliydi; bu kuruma "
+                "UYELIK eklendi. Mevcut sifresi degistirilmedi - kullanici "
+                "kendi sifresiyle girip kurum secer."
+            ),
+        }
 
     sifre = _uret_sifre()
     kullanici = models.User(
@@ -180,23 +256,8 @@ def create_user(
     )
     db.add(kullanici)
     db.flush()
-    _rol_ver(db, kullanici, govde.roles, _varsayilan_kurum_id(db))
-
-    # Istege bagli: ayni islemde takima ekle. Yonetici "hesabi ac + takima
-    # ekle"yi iki ayri adimda yapmak zorunda kalmasin; iki adimin arasinda
-    # unutulan bir uye, sonucunu hic goremeyen bir yarismaci demek.
-    if govde.team_id:
-        takim = db.query(models.Team).filter(models.Team.id == govde.team_id).first()
-        if not takim:
-            raise HTTPException(status_code=404, detail="Takim bulunamadi.")
-        db.add(
-            models.TeamMember(
-                id=str(uuid.uuid4()),
-                team_id=takim.id,
-                user_id=kullanici.id,
-                role=govde.team_role or "uye",
-            )
-        )
+    _rol_ver(db, kullanici, govde.roles, kurum)
+    takim_id = _takima_ekle(db, kullanici, govde, kurum)
 
     db.commit()
     db.refresh(kullanici)
@@ -204,14 +265,62 @@ def create_user(
         "id": kullanici.id,
         "email": kullanici.email,
         "full_name": kullanici.full_name,
-        "roles": kullanici.role_list,
-        "team_id": govde.team_id,
+        "roles": kullanici.roles_in(kurum),
+        "team_id": takim_id,
         "temporary_password": sifre,
         "notice": (
             "Bu sifre YALNIZCA BURADA gorunuyor; veri tabaninda yalnizca "
             "ozeti saklaniyor. Kullaniciya guvenli bir kanaldan iletin."
         ),
     }
+
+
+def _takima_ekle(db: Session, kullanici: models.User, govde, kurum: str):
+    """Istege bagli: ayni islemde takima ekle.
+
+    Yonetici "hesabi ac + takima ekle"yi iki ayri adimda yapmak zorunda
+    kalmasin; iki adimin arasinda unutulan bir uye, sonucunu HIC goremeyen
+    bir yarismaci demek.
+
+    TAKIM CAGIRANIN KURUMUNDA OLMALI: onceden kontrol yoktu, yani bir kurumun
+    yoneticisi BASKA bir kurumun takimina uye ekleyebiliyordu - eklenen kisi
+    o takimin butun basvuru sonuclarini gorurdu. "Yok" ile "baska kurumun"
+    ayni 404'u donuyor.
+    """
+    if not govde.team_id:
+        return None
+    takim = db.query(models.Team).filter(models.Team.id == govde.team_id).first()
+    if takim is None or not tenancy.ayni_kurum_mu(takim, kullanici_kurum_sahtesi(kurum)):
+        raise HTTPException(status_code=404, detail="Takim bulunamadi.")
+    zaten = (
+        db.query(models.TeamMember)
+        .filter(
+            models.TeamMember.team_id == takim.id,
+            models.TeamMember.user_id == kullanici.id,
+        )
+        .first()
+    )
+    if zaten:
+        return takim.id
+    db.add(
+        models.TeamMember(
+            id=str(uuid.uuid4()),
+            team_id=takim.id,
+            user_id=kullanici.id,
+            role=govde.team_role or "uye",
+        )
+    )
+    return takim.id
+
+
+class kullanici_kurum_sahtesi:
+    """`tenancy.ayni_kurum_mu` bir KULLANICI bekliyor; burada elimizde yalnizca
+    kurum kimligi var. Kurumu ikinci bir yerde elle karsilastirmak yerine ayni
+    fonksiyonu cagiriyoruz - gecis toleransi ve KATI_KURUM davranisi tek
+    yerde kalsin."""
+
+    def __init__(self, kurum_id):
+        self.active_org_id = kurum_id
 
 
 @router.post("/login", response_model=schemas.LoginResponse)
@@ -270,7 +379,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             kurumlar = {o for o, r in secenekler if r == aktif_rol}
             if len(kurumlar) == 1:
                 aktif_kurum = next(iter(kurumlar))
-        if (aktif_kurum, aktif_rol) not in secenekler:
+        if not _secim_gecerli(user, aktif_kurum, aktif_rol):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
@@ -320,6 +429,13 @@ def select_role(
     kurum = secim.organization_id
     if kurum is None:
         adaylar = {o for o, r in secenekler if r == secim.role}
+        # Sorumlu oldugu kurumlar da aday: sorumlu, kendisine henuz
+        # verilmemis bir rolu de secebiliyor (bkz. _secim_gecerli).
+        adaylar |= {
+            u["organization_id"]
+            for u in uyelikler
+            if "ORG_OWNER" in u["roles"] and secim.role in models.ROLLER
+        }
         if len(adaylar) == 1:
             kurum = next(iter(adaylar))
         elif len(adaylar) > 1:
@@ -331,7 +447,7 @@ def select_role(
                 ),
             )
 
-    if (kurum, secim.role) not in secenekler:
+    if not _secim_gecerli(current_user, kurum, secim.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(

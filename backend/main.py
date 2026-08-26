@@ -12,6 +12,7 @@ from app.routes import (
     dashboard as dashboard_router,
     assignments as assignments_router,
     competitions as competitions_router,
+    organizations as organizations_router,
 )
 from app import models, auth
 from app.services import storage
@@ -47,6 +48,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth_router.router)
+app.include_router(organizations_router.router)
 app.include_router(criteria_router.router)
 app.include_router(reports_router.router)
 app.include_router(dashboard_router.router)
@@ -105,31 +107,47 @@ def seed_db():
                  ["COMPETITOR"]),
                 ("evaluator@teknofest.org", "password123", "Demo Değerlendirme Yöneticisi",
                  ["EVALUATION_MANAGER"]),
-                # COK-ROLLU TEST HESABI: dort rolun hepsine sahip. Giriste
-                # rol secim ekrani cikar; tek hesapla tum akislar denenebilir.
+                # COK-ROLLU TEST HESABI: her role sahip - ORG_OWNER dahil.
+                # Kullanicinin tarif ettigi hesap bu: "asdfghjkl hesabi gibi
+                # superuserlar olmali, kendi kurumundaki hakemleri
+                # yoneticileri herkesi degistirebilmeli". Giriste kurum+rol
+                # secim ekrani cikar; tek hesapla tum akislar denenebilir.
                 ("asdfghjkl@gmail.com", "asdfghjkl", "Test Kullanıcısı",
                  list(models.ROLLER)),
             ]
-            for email, pwd, ad, roller in default_users:
-                db_user = models.User(
-                    id=str(uuid.uuid4()),
-                    email=email,
-                    password_hash=auth.hash_password(pwd),
-                    full_name=ad,
-                )
-                db.add(db_user)
-                db.flush()
-                for rol in roller:
-                    # Tum seed kullanicilari varsayilan kuruma (T3 Vakfi)
-                    # bagli. Ikinci kurum (CBU) demoda elle uye eklenerek
-                    # kullaniliyor - kurumlar arasi yalitim ancak boyle
-                    # gosterilebilir.
-                    db.add(models.UserRole(
+
+            # IKINCI KURUM (CBU) HESAPLARI. Tek kurumla "A kurumu B'yi
+            # goremiyor" kurali HIC sinanamaz; yalitimi gostermek icin
+            # karsi tarafta da gercek hesaplar gerekiyor. Bu hesaplar
+            # KASITLI olarak org-t3'te HICBIR role sahip degil.
+            cbu_users = [
+                ("sorumlu@cbu.edu.tr", "parola123", "CBÜ Kurum Sorumlusu",
+                 ["ORG_OWNER"]),
+                ("ogretim@cbu.edu.tr", "parola123", "CBÜ Öğretim Elemanı",
+                 ["COMPETITION_MANAGER"]),
+                ("asistan@cbu.edu.tr", "parola123", "CBÜ Asistan",
+                 ["REFEREE"]),
+                ("ogrenci@cbu.edu.tr", "parola123", "CBÜ Öğrencisi",
+                 ["COMPETITOR"]),
+            ]
+
+            for kurum_id, hesaplar in (("org-t3", default_users), ("org-cbu", cbu_users)):
+                for email, pwd, ad, roller in hesaplar:
+                    db_user = models.User(
                         id=str(uuid.uuid4()),
-                        user_id=db_user.id,
-                        organization_id="org-t3",
-                        role=rol,
-                    ))
+                        email=email,
+                        password_hash=auth.hash_password(pwd),
+                        full_name=ad,
+                    )
+                    db.add(db_user)
+                    db.flush()
+                    for rol in roller:
+                        db.add(models.UserRole(
+                            id=str(uuid.uuid4()),
+                            user_id=db_user.id,
+                            organization_id=kurum_id,
+                            role=rol,
+                        ))
             db.commit()
 
         # --- Takimlar -------------------------------------------------------

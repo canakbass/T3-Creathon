@@ -102,6 +102,13 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         gecerli_roller = (
             user.roles_in(aktif_kurum) if aktif_kurum is not None else user.role_list
         )
+        # KURUM SORUMLUSU KENDI KURUMUNDA HER ROLU TASIYABILIR: "her role
+        # bakabilmeli" istegi buradan gecmezse rol secimi basarili olur ama
+        # sonraki her istek 403 dondururdu - yani secim ekrani calisir gibi
+        # gorunup sistem kullanilamaz hale gelirdi. Yetki genislemesi DEGIL:
+        # sorumlu o rolu kendine zaten verebiliyor.
+        if aktif_kurum is not None and "ORG_OWNER" in gecerli_roller:
+            gecerli_roller = list(models.ROLLER)
         if aktif_rol not in gecerli_roller:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

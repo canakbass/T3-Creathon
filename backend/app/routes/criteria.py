@@ -32,7 +32,7 @@ def get_categories(
 def create_category(
     category_in: schemas.CategoryBase,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"]))
+    current_user: models.User = Depends(auth.RoleChecker(list(models.YONETICI_ROLLERI)))
 ):
     cat_id = str(uuid.uuid4())
     db_category = models.Category(
@@ -75,7 +75,7 @@ def get_criteria(
 def create_criteria(
     criteria_in: schemas.CriteriaBase,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"]))
+    current_user: models.User = Depends(auth.RoleChecker(list(models.YONETICI_ROLLERI)))
 ):
     # Verify category exists
     category = db.query(models.Category).filter(models.Category.id == criteria_in.category_id).first()

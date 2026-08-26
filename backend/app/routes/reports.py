@@ -376,7 +376,7 @@ async def upload_report(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(
-        auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+        auth.RoleChecker(list(models.YONETICI_ROLLERI))
     )
 ):
     """Raporu SISTEME AKTARIR ve AI analizini arka planda baslatir.
@@ -573,7 +573,7 @@ def _rapora_erisebilir_mi(report: models.Report, user: models.User) -> bool:
         return False
 
     aktif = getattr(user, "active_role", None)
-    if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
+    if aktif in models.YONETICI_ROLLERI:
         return True
     if aktif == "COMPETITOR":
         return _yarismacinin_raporu_mu(report, user)
@@ -638,7 +638,7 @@ def _erisim_filtresi(query, user: models.User, db: Session):
             | (models.Report.organization_id.is_(None))  # gecis donemi
         )
 
-    if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
+    if aktif in models.YONETICI_ROLLERI:
         return query
     if aktif == "COMPETITOR":
         takim_kimlikleri = [
@@ -760,7 +760,7 @@ def list_reports(
 # 404'u donerdi. Hata mesaji yetkilendirmeyi hic akla getirmez; sessiz ve
 # uzun suren bir hata olurdu. Testi bu yuzden 404 OLMADIGINI da dogruluyor.
 _ARAMA_ROLLERI = auth.RoleChecker(
-    ["REFEREE", "COMPETITION_MANAGER", "EVALUATION_MANAGER"]
+    ["REFEREE", *models.YONETICI_ROLLERI]
 )
 
 
@@ -864,7 +864,7 @@ def lookup_reports(
     sonuc = []
     for r in q.order_by(models.Report.submission_date.desc()).limit(50).all():
         atanmis = r.assignment is not None and r.assignment.referee_id == current_user.id
-        tam_yetki = atanmis or aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER")
+        tam_yetki = atanmis or aktif in models.YONETICI_ROLLERI
 
         if not tam_yetki:
             db.add(
@@ -917,7 +917,7 @@ def reanalyze_report(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(
-        auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+        auth.RoleChecker(list(models.YONETICI_ROLLERI))
     ),
 ):
     """Analizi COKMUS bir raporun analizini yeniden calistirir.

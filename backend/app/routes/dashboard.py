@@ -8,7 +8,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 @router.get("/stats", response_model=schemas.DashboardStats)
 def get_dashboard_stats(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"]))
+    current_user: models.User = Depends(auth.RoleChecker(list(models.YONETICI_ROLLERI)))
 ):
     # Sayilar KURUMLA sinirli. Toplam sayilar zararsiz gorunuyor ama bir
     # kurumun kac basvuru aldigi ve kacini reddettigi o kuruma ait bir bilgi;

@@ -19,8 +19,35 @@ def _utcnow() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
 
 
-# Sistemdeki dort rol (bkz. docs/PROJECT_CONTEXT.md Bolum 2).
-ROLLER = ("COMPETITION_MANAGER", "REFEREE", "COMPETITOR", "EVALUATION_MANAGER")
+# Sistemdeki roller (bkz. docs/PROJECT_CONTEXT.md Bolum 2).
+#
+# ORG_OWNER (kurum sorumlusu) sartnamedeki dort role sonradan eklendi.
+# NEDEN: dort rol "bu kurumda kim ne yapar" sorusunu cevapliyordu ama "bu
+# kurumda KIM VAR" sorusunu kimse cevaplamiyordu. Sonuc olarak hesap acma
+# yetkisi yarisma yonetisindeydi ve her yonetici sinirsiz yonetici
+# uretebiliyordu - yani yetki zinciri kendi kendini cogaltiyordu.
+# Kurum sorumlusu bu zincirin kokunu tutuyor: kurumun uyelerini ve
+# rollerini YALNIZCA o degistirir, ama YALNIZCA KENDI kurumunda.
+ROLLER = (
+    "ORG_OWNER",
+    "COMPETITION_MANAGER",
+    "REFEREE",
+    "COMPETITOR",
+    "EVALUATION_MANAGER",
+)
+
+# Kurumun tum verisini gorebilen roller. Yetki kapilari bu listeyi kullanir;
+# uc ayri dosyada elle yazilan tuple'lar zamanla birbirinden ayrisiyordu.
+YONETICI_ROLLERI = ("ORG_OWNER", "COMPETITION_MANAGER", "EVALUATION_MANAGER")
+
+# YALNIZCA kurum sorumlusunun verebilecegi roller.
+#
+# NEDEN: bu roller kurumun TUM verisini gorebiliyor (ya da ORG_OWNER
+# durumunda baskalarina yetki verebiliyor). Yarisma yoneticisi bunlari
+# dagitabilseydi, tek bir yonetici hesabi ele gecirildiginde saldirgan
+# kendine sinirsiz yonetici uretip kurumu kalici olarak elinde tutabilirdi.
+# Yetki YUKARI DOGRU dagitilamaz.
+AYRICALIKLI_ROLLER = ("ORG_OWNER", "COMPETITION_MANAGER", "EVALUATION_MANAGER")
 
 
 class User(Base):

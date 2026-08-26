@@ -24,7 +24,7 @@ from .. import models, schemas, auth, tenancy
 router = APIRouter(prefix="/api/assignments", tags=["Assignments"])
 
 # Atama islemlerini yalnizca yarismayi yoneten roller yapabilir.
-_YONETICI = auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+_YONETICI = auth.RoleChecker(list(models.YONETICI_ROLLERI))
 
 
 def _rapor_getir_yetkiliyse(report_id: str, user, db: Session) -> models.Report:

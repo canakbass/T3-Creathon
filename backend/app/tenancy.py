@@ -37,7 +37,9 @@ from . import models
 # tamamen kapanir. Simdilik kapali cunku eski kayitlarin kurumu yok.
 KATI_KURUM = os.getenv("STRICT_TENANCY", "0") == "1"
 
-YONETICI_ROLLERI = ("COMPETITION_MANAGER", "EVALUATION_MANAGER", "ORG_OWNER")
+# Tek tanim models.py'de: uc ayri dosyada elle yazilan rol listeleri
+# zamanla birbirinden ayrisiyordu.
+YONETICI_ROLLERI = models.YONETICI_ROLLERI
 
 
 def aktif_kurum(user) -> str | None:
