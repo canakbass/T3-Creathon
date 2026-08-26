@@ -54,6 +54,20 @@ ASAMALAR = ("draft", "open", "closed", "evaluating", "completed")
 YUKLEMEYE_ACIK = ("open",)
 
 
+# Kullanici-kurum uyeligi devreye girene kadar yeni yarismalarin baglanacagi
+# kurum. Uyelik geldiginde burasi olusturanin AKTIF kurumuyla degisecek.
+VARSAYILAN_KURUM_SLUG = "t3-vakfi"
+
+
+def _varsayilan_kurum_id(db: Session):
+    kurum = (
+        db.query(models.Organization)
+        .filter(models.Organization.slug == VARSAYILAN_KURUM_SLUG)
+        .first()
+    )
+    return kurum.id if kurum else None
+
+
 def _json_yukle(deger, varsayilan):
     if not deger:
         return varsayilan
@@ -71,6 +85,7 @@ def _yanit(y: models.Competition) -> dict:
         "category_id": y.category_id,
         "category_name": y.category.name if y.category else None,
         "category_label": y.category_label,
+        "organization_id": y.organization_id,
         "status": y.status,
         "submission_deadline": y.submission_deadline,
         "created_at": y.created_at,
@@ -145,6 +160,16 @@ def create_competition(
         category_id=kategori.id,
         category_label=govde.category_label,
         created_by_id=current_user.id,
+        # Kurum bagi: su an olusturanin kurumundan TURETILEMIYOR cunku
+        # kullanici-kurum uyeligi henuz yok. Gecici olarak ACIKCA ADLANDIRILMIS
+        # varsayilan kuruma baglaniyor.
+        #
+        # NEDEN "ilk kurum" DEGIL: ilk denemede `order_by(id).first()`
+        # yazmistim ve alfabetik sira yuzunden yarisma "org-cbu"ya baglandi -
+        # sessizce YANLIS kurum. Varsayilan tahmin edilmemeli, adiyla
+        # secilmeli; bulunamazsa bos birakilmali (yanlis kuruma baglamaktansa
+        # bagsiz birakmak yeglenir).
+        organization_id=_varsayilan_kurum_id(db),
         status="draft",
         submission_deadline=govde.submission_deadline,
     )

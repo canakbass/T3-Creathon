@@ -66,6 +66,39 @@ class UserRole(Base):
     user = relationship("User", back_populates="roles")
 
 
+class Organization(Base):
+    """KURUM (kiraci / tenant).
+
+    NEDEN VAR: sistem bugune kadar TEK KURUMLUK calisiyordu - herkes ayni
+    havuzdaydi. Bunun uc somut sonucu vardi:
+      * Bir kurumda hakem olan, HER kurumda hakemdi (UserRole global).
+      * "Bu yarisma kimin?" sorusunun cevabi sistemde YOKTU
+        (Competition.created_by_id vardi ama hicbir yerde filtre degildi).
+      * GET /api/reports/lookup ile bir kurumun hakemi, BASKA bir kurumun
+        her basvurusunun kunyesini okuyabiliyordu.
+
+    Ayni kullanici BIRDEN FAZLA kurumda olabilir ve rolleri kuruma gore
+    DEGISEBILIR: ayni kisi TEKNOFEST'te hakem, kendi universitesinde odev
+    degerlendiren egitmen olabilir.
+
+    DIKKAT: bu tablo tek basina hicbir seyi KISITLAMIYOR. Kisitlama, erisim
+    kapilarina kurum kapsami eklendiginde devreye girer. Kismi uygulama
+    (alan var ama filtre yok) tehlikelidir - bu yuzden alanlar ve filtreler
+    ayni adimda gitmeli.
+    """
+
+    __tablename__ = "organizations"
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    # Kisa, insan-okunur kimlik ("t3-vakfi", "cbu-muhendislik").
+    slug = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
+    competitions = relationship("Competition", back_populates="organization")
+    teams = relationship("Team", back_populates="organization")
+
+
 class Category(Base):
     """Konu alani (Robotik, Yapay Zeka, Saglik...).
 
@@ -102,6 +135,12 @@ class Competition(Base):
     description = Column(Text, nullable=True)
     category_id = Column(String, ForeignKey("categories.id"), nullable=False)
     created_by_id = Column(String, ForeignKey("users.id"), nullable=False)
+    # Yarismanin SAHIBI kurum. `created_by_id` yalnizca "kim olusturdu"yu
+    # soyluyor ve o kisi kurumdan ayrilabilir; sahiplik kisiye degil KURUMA
+    # ait olmali.
+    organization_id = Column(
+        String, ForeignKey("organizations.id"), nullable=True, index=True
+    )
     created_at = Column(DateTime, default=_utcnow)
 
     # Yarismanin asamasi. Yarismacinin rapor yukleyip yukleyemeyecegini ve
@@ -157,6 +196,7 @@ class Competition(Base):
     min_section_chars = Column(Integer, nullable=True)
 
     category = relationship("Category", back_populates="competitions")
+    organization = relationship("Organization", back_populates="competitions")
     created_by = relationship("User", foreign_keys=[created_by_id])
     reports = relationship("Report", back_populates="competition")
     criteria_list = relationship(
@@ -267,8 +307,14 @@ class Team(Base):
     # KYS'deki takim kimligi. Gercek entegrasyonda eslestirme bu alandan
     # yapilir; bizim id'lerimiz KYS'nin id'leri olmak zorunda degil.
     external_ref = Column(String, nullable=True, index=True)
+    # Takimin bagli oldugu kurum. Ayni takim adi farkli kurumlarda
+    # bulunabilir; `external_ref` de yalnizca kurum icinde benzersizdir.
+    organization_id = Column(
+        String, ForeignKey("organizations.id"), nullable=True, index=True
+    )
     created_at = Column(DateTime, default=_utcnow)
 
+    organization = relationship("Organization", back_populates="teams")
     members = relationship(
         "TeamMember", back_populates="team", cascade="all, delete-orphan", lazy="selectin"
     )

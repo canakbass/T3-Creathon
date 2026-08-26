@@ -164,6 +164,9 @@ class CompetitionResponse(BaseModel):
     category_name: Optional[str] = None
     # Yarismanin kendi kategori/seviye etiketi (serbest metin).
     category_label: Optional[str] = None
+    # Yarismanin sahibi kurum (kiraci). Su an bilgi amacli; kurum kapsami
+    # devreye girdiginde erisim filtresinin dayanagi olacak.
+    organization_id: Optional[str] = None
     status: str
     submission_deadline: Optional[datetime] = None
     created_at: datetime

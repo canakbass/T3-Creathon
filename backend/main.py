@@ -67,6 +67,21 @@ def seed_db():
 
     db = SessionLocal()
     try:
+        # --- Kurumlar ------------------------------------------------------
+        #
+        # Varsayilan kurum, geriye donuk uyum icin: mevcut tum kayitlar buna
+        # baglaniyor ve sistem bozulmadan devam ediyor. Ikinci kurum, kurumlar
+        # arasi yalitimin DEMO EDILEBILMESI icin - tek kurumla "A kurumu B'yi
+        # goremiyor" kurali hic sinanamaz.
+        if db.query(models.Organization).count() == 0:
+            print("Seeding organizations...")
+            for org_id, ad, slug in [
+                ("org-t3", "T3 Vakfı", "t3-vakfi"),
+                ("org-cbu", "Manisa Celal Bayar Üniversitesi", "cbu"),
+            ]:
+                db.add(models.Organization(id=org_id, name=ad, slug=slug))
+            db.commit()
+
         # Check if users are seeded
         if db.query(models.User).count() == 0:
             print("Seeding default users...")
@@ -139,7 +154,9 @@ def seed_db():
                  [("rakip@teknofest.org", "kaptan")]),
             ]
             for takim_id, ad, dis_ref, uyeler in takimlar:
-                db.add(models.Team(id=takim_id, name=ad, external_ref=dis_ref))
+                db.add(models.Team(
+                    id=takim_id, name=ad, external_ref=dis_ref, organization_id="org-t3"
+                ))
                 db.flush()
                 for eposta, gorev in uyeler:
                     u = _kullanici(eposta)
