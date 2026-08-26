@@ -13,8 +13,8 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 |---|---|---|---|
 | `ai-doc-analysis/` | Hasan | Dil/şablon/başlık kontrolü + şablondan otomatik çıkarım | ✅ Çalışıyor, gerçek veriyle test edildi (46 test) |
 | `ai-scoring/` | Hayrettin | Kategori, benzerlik, kriter puanlama | ✅ Çalışıyor, backend'e entegre edildi (102 test) — mock'lar kaldırıldı |
-| `backend/` | Mustafa | FastAPI — API, veri modeli, auth, yarışma/takım/atama | ✅ Çalışıyor (85 test); SQLite veya Supabase Postgres |
-| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Backend'e bağlı (112 test); tüm mock veri kaldırıldı |
+| `backend/` | Mustafa | FastAPI — API, veri modeli, auth, yarışma/takım/atama | ✅ Çalışıyor (93 test); SQLite veya Supabase Postgres |
+| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Backend'e bağlı (123 test); tüm mock veri kaldırıldı |
 | `docs/` | — | Ortak dokümanlar, API sözleşmesi, MVP kuralları | Güncel |
 
 ## MVP'nin 6 zorunlu maddesi — hepsi tamam
@@ -303,6 +303,57 @@ iz bırakması.
 
 ---
 
+## Kim ne yapar — akış sahipliği (2026-08-26)
+
+Şartnamedeki üç akış kimin ne yapacağını belirliyor ve sistem artık buna
+birebir uyuyor.
+
+| Rol | Yapar | **Yapmaz** |
+|---|---|---|
+| Yarışma Yöneticisi | Değerlendirmeyi tanımlar, şablon+kriter ekler, **raporları sisteme aktarır**, hakem dağıtır, **hesap açar** | — |
+| Hakem | Kendine atananları değerlendirir, atanmamışları künye düzeyinde **arar** | Atanmamış raporun analizini/PDF'ini göremez |
+| Yarışmacı | Takımının **sonucunu görüntüler** | **Rapor yüklemez**, arama yapamaz, kendi kendine kayıt olamaz |
+
+**Yarışmacı neden rapor yüklemiyor:** AKIŞ 03'te yükleme adımı yok —
+*"Değerlendirme tamamlanır → sonucunu görüntüler → güçlü ve gelişime açık
+yönlerini inceler → önerileri görür."* Yükleme AKIŞ 01'de, yöneticide.
+Gerçek hayatta da raporlar TEKNOFEST'in kendi sistemine (KYS / `t3kys.com`)
+teslim ediliyor; bu sistem onları **değerlendiren** katman, toplama noktası
+değil.
+
+**Yarışmacı sonucunu nasıl görüyor:** takım üyeliğinden. Yönetici raporu
+`team_id` ile aktarıyor, o takımın **her üyesi** raporu görüyor — yüklediği
+için değil, takımda olduğu için.
+
+**Hesaplar neden yöneticiden açılıyor:** raporun sonucunu takım üyeliği
+belirliyor ve üyelik e-postaya bağlı. Kendi kendine kayıt açık olsaydı, bir
+takım üyesinin e-postasını ilk kaydettiren kişi o takımın sonuçlarını
+görürdü. E-posta doğrulaması bunu **çözmez** — doğrulama "bu kişi bu kutuya
+erişebiliyor" der; asıl soru "bu e-posta bu takıma mı ait" ve onun cevabını
+yalnızca yönetici bilir. `POST /api/auth/users` ile hesap açılıyor, şifreyi
+`secrets` üretiyor, aynı istekte takıma ekleniyor. Kendi kendine kayıt
+varsayılan olarak **kapalı** (`SELF_REGISTRATION=1` ile açılır) — yapılandırmayı
+unutmak güvenliği artırsın diye.
+
+## Bir yarışmanın birden fazla aşaması
+
+TEKNOFEST'te bir yarışmanın en az iki raporu var (Ön Tasarım + Final Tasarım)
+ve **puan ağırlıkları farklı**. Bunun için ayrı bir "şablon tablosu"
+gerekmiyor: her aşama kendi değerlendirmesi olarak açılıyor.
+
+```
+"Havacılıkta YZ — Ön Tasarım Raporu"   · Üniversite ve Üzeri
+"Havacılıkta YZ — Final Tasarım Raporu" · Üniversite ve Üzeri
+"Havacılıkta YZ — Ön Tasarım Raporu"   · Lise
+```
+
+Her birinin kendi şablonu, kendi kriter ağırlıkları ve kendi hakem kadrosu
+var. Ölçüldü: bir takımın FTR'si kendi ÖTR'sine karşı **0 benzerlik** alıyor —
+aynı-takım dışlaması takım kimliğine baktığı için aşamalar arasında da
+çalışıyor.
+
+---
+
 ## Güvenlik ve bütünlük denetimi (2026-08-25)
 
 Sistemin tamamı düşmanca bir gözle tarandı; **26 aday bulgunun tamamı canlı
@@ -362,13 +413,13 @@ Ayrıntılı kurulum için **[KURULUM.md](KURULUM.md)**. Kısa hâli:
 # ai-scoring (Hayrettin)           -> 102 test
 .venv/bin/python ai-scoring/tests/test_scorer.py
 
-# backend (Mustafa)                -> 85 test
+# backend (Mustafa)                -> 93 test
 cd backend && ../.venv/bin/python -m pytest tests/ -q; cd ..
 
-# frontend (Mahmut)                -> 112 test
+# frontend (Mahmut)                -> 123 test
 cd frontend && npm install && npm test; cd ..
 
-# uctan uca, CALISAN sunucuya karsi -> 46 kontrol
+# uctan uca, CALISAN sunucuya karsi -> 48 kontrol
 scripts/dev-backend.sh start
 .venv/bin/python scripts/e2e-test.py
 scripts/dev-backend.sh stop
@@ -418,6 +469,9 @@ Seed kullanıcıları (ilk açılışta oluşur, şifreleri `password123`):
 | `competitor2@teknofest.org` | Yarışmacı | Glieser (üye) |
 | `rakip@teknofest.org` | Yarışmacı | Zebot |
 
+Bu hesaplar seed'den geliyor. Yeni hesaplar **yönetici panelinden** açılıyor
+("Hesap Aç" bölümü) — kendi kendine kayıt kapalı.
+
 Çok rollü test hesabı: `asdfghjkl@gmail.com` / `asdfghjkl` — dört rolün
 hepsi, girişte rol seçim ekranı çıkar.
 
@@ -432,9 +486,9 @@ rapor yüklerken **hangi takım adına** yüklediğini seçmek zorundadır.
 |---|---|
 | `ai-doc-analysis` | 46 başarılı, 0 başarısız |
 | `ai-scoring` | 102 başarılı, 0 başarısız |
-| `backend` (pytest) | 85 başarılı, 0 başarısız |
-| `frontend` (jest) | 112 başarılı, 0 başarısız |
-| `scripts/e2e-test.py` (canlı sunucu) | 46 başarılı, 0 başarısız |
+| `backend` (pytest) | 93 başarılı, 0 başarısız |
+| `frontend` (jest) | 123 başarılı, 0 başarısız |
+| `scripts/e2e-test.py` (canlı sunucu) | 48 başarılı, 0 başarısız |
 | `frontend` (next build) | başarılı |
 | Uçtan uca — API akışı | 40 başarılı, 0 başarısız |
 | Uçtan uca — arayüz istek şekilleri (canlı backend) | 32 başarılı, 0 başarısız |
