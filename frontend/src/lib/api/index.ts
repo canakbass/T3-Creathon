@@ -184,19 +184,78 @@ export interface RegisterInput {
   email: string;
   password: string;
   fullName?: string;
-  roles: string[];
 }
 
-export async function register(input: RegisterInput): Promise<WireUser> {
-  return apiFetch<WireUser>("/api/auth/register", {
+export interface RegistrationResult {
+  message: string;
+  /** YALNIZCA geliştirmede dolu (DEV_EXPOSE_EMAIL_TOKEN=1). */
+  dev_token: string | null;
+}
+
+/**
+ * Kendi kendine kayıt.
+ *
+ * ROL GÖNDERMİYORUZ ve sunucu da kabul etmiyor: kayıt hiçbir rol, hiçbir
+ * kurum vermiyor. Rol yalnızca iki yolla geliyor — kurum sorumlusu verir,
+ * ya da DOĞRULANMIŞ e-posta bir bekleyen takım üyeliğiyle eşleşir.
+ *
+ * YANIT HER DURUMDA AYNI: "bu e-posta zaten kayıtlı" demek, herhangi
+ * birinin adres deneyerek sistemde kimin hesabı olduğunu öğrenmesi demekti.
+ */
+export async function register(input: RegisterInput): Promise<RegistrationResult> {
+  return apiFetch<RegistrationResult>("/api/auth/register", {
     method: "POST",
     skipAuth: true,
     json: {
       email: input.email,
       password: input.password,
       full_name: input.fullName || null,
-      roles: input.roles,
     },
+  });
+}
+
+export interface VerificationResult {
+  message: string;
+  /** Doğrulama anında bağlanan bekleyen takım üyeliği sayısı. */
+  linked_teams: number;
+}
+
+export async function verifyEmail(token: string): Promise<VerificationResult> {
+  return apiFetch<VerificationResult>("/api/auth/verify-email", {
+    method: "POST",
+    skipAuth: true,
+    json: { token },
+  });
+}
+
+export async function resendVerification(email: string): Promise<{ message: string }> {
+  return apiFetch<{ message: string }>("/api/auth/resend-verification", {
+    method: "POST",
+    skipAuth: true,
+    json: { email },
+  });
+}
+
+/**
+ * Şifre sıfırlama isteği. Kayıtlı/kayıtsız AYNI cevabı döner — ayrılsaydı
+ * varlık kâhini olurdu.
+ */
+export async function requestPasswordReset(email: string): Promise<{ message: string }> {
+  return apiFetch<{ message: string }>("/api/auth/password-reset/request", {
+    method: "POST",
+    skipAuth: true,
+    json: { email },
+  });
+}
+
+export async function confirmPasswordReset(
+  token: string,
+  newPassword: string,
+): Promise<VerificationResult> {
+  return apiFetch<VerificationResult>("/api/auth/password-reset/confirm", {
+    method: "POST",
+    skipAuth: true,
+    json: { token, new_password: newPassword },
   });
 }
 

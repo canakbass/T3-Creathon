@@ -156,15 +156,35 @@ describe("RoleSelectionScreen", () => {
     expect(screen.queryByTestId("membership-picker")).not.toBeInTheDocument();
   });
 
-  it("kendi kendine kayıt yolunu GÖSTERMİYOR", () => {
-    // Backend'de kapalı (403); form burada dursaydı her denemede hata veren
-    // ölü bir yol olurdu.
+  it("kayıt ve şifremi unuttum yollarını gösteriyor", async () => {
+    // Kayıt artık AÇIK ama tek başına hiçbir şey açmıyor: hesap açılıyor,
+    // hiçbir rol ve hiçbir kurum verilmiyor. Sonucu görmenin yolu e-postayı
+    // DOĞRULAMAK.
     mockFetch();
+    const user = userEvent.setup();
     render(<RoleSelectionScreen />);
 
-    expect(screen.queryByRole("button", { name: /kaydol/i })).not.toBeInTheDocument();
-    expect(screen.queryByTestId("register-form")).not.toBeInTheDocument();
-    expect(screen.getByTestId("login-form")).toHaveTextContent(/yöneticisi açar/i);
+    expect(screen.getByTestId("go-register")).toBeInTheDocument();
+    expect(screen.getByTestId("go-reset")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("go-register"));
+    expect(screen.getByTestId("register-form")).toBeInTheDocument();
+    // Beklentiyi dogru kurmak icin: kayit olmak yarismaya erisim vermiyor.
+    expect(screen.getByTestId("register-form")).toHaveTextContent(
+      /erişim vermez|doğrulamanız gerekiyor/i,
+    );
+  });
+
+  it("şifremi unuttum formuna geçip geri dönebiliyor", async () => {
+    mockFetch();
+    const user = userEvent.setup();
+    render(<RoleSelectionScreen />);
+
+    await user.click(screen.getByTestId("go-reset"));
+    expect(screen.getByTestId("reset-form")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /giriş ekranına dön/i }));
+    expect(screen.getByTestId("login-form")).toBeInTheDocument();
   });
 
   it("signs a single-option user straight into their dashboard", async () => {

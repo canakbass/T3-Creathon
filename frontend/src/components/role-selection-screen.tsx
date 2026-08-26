@@ -10,6 +10,7 @@ import {
 } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
 import { ROLE_DEFINITIONS, getDashboardPath, isRole, type Role } from "@/lib/roles";
+import { AccountForm } from "@/components/auth/account-forms";
 import { useAuthStore } from "@/store/auth-store";
 
 const ROLE_ICON_PATHS: Record<Role, string> = {
@@ -33,11 +34,15 @@ const ROLE_ICON_PATHS: Record<Role, string> = {
  * her ekranda ayrı ayrı düşünülmek zorunda kalırdı. Tek atomik seçim bu
  * sınıfı tümden yok ediyor.
  *
- * NEDEN KAYIT FORMU YOK: kendi kendine kayıt kapalı. Bir raporun sonucunu
- * TAKIM ÜYELİĞİ belirliyor ve üyelik e-postaya bağlı; kayıt açık olsaydı bir
- * takım üyesinin e-postasını ilk kaydettiren kişi o takımın sonuçlarını
- * görürdü. Hesapları yönetici açıyor (bkz. AccountCreator). Formu burada
- * tutmak, her denemede 403 dönen ölü bir yol bırakmak olurdu.
+ * KAYIT ARTIK AÇIK ama tek başına hiçbir şey açmıyor: hesap açılıyor,
+ * hiçbir rol ve hiçbir kurum verilmiyor. Sonucu görmenin yolu e-postayı
+ * DOĞRULAMAK — çünkü bir raporun sonucunu TAKIM ÜYELİĞİ belirliyor, üyelik
+ * e-postaya bağlı ve kayıt doğrulamasız açık olsaydı bir takım üyesinin
+ * e-postasını ilk kaydettiren kişi o takımın sonuçlarını görürdü.
+ *
+ * Yönetici hesap açmaya devam ediyor (bkz. AccountCreator); o hesaplarda
+ * kimliğe yönetici kefil oluyor. İki yol birbirinin yerine geçmiyor,
+ * birbirini tamamlıyor.
  */
 export function RoleSelectionScreen() {
   const router = useRouter();
@@ -50,6 +55,7 @@ export function RoleSelectionScreen() {
   const [busy, setBusy] = useState(false);
   // Seçim adımında elde tutulan oturum (token alındı, kurum+rol seçilmedi).
   const [bekleyen, setBekleyen] = useState<Session | null>(null);
+  const [adim, setAdim] = useState<"giris" | "kayit" | "sifremi-unuttum">("giris");
 
   function oturumuKur(session: Session, kurum: Membership | null) {
     signIn({
@@ -110,6 +116,19 @@ export function RoleSelectionScreen() {
   }
 
   const secimGerekli = bekleyen !== null;
+
+  if (!secimGerekli && adim !== "giris") {
+    return (
+      <main className="flex min-h-screen w-full flex-col items-center justify-center bg-background px-4 py-16">
+        <div className="w-full max-w-md">
+          <h1 className="mb-6 text-center text-3xl font-extrabold tracking-tight text-foreground">
+            {adim === "kayit" ? "Hesap oluşturun" : "Şifremi unuttum"}
+          </h1>
+          <AccountForm mod={adim} onGeriDon={() => setAdim("giris")} />
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="flex min-h-screen w-full flex-col items-center justify-center bg-background px-4 py-16">
@@ -257,11 +276,28 @@ export function RoleSelectionScreen() {
               {busy ? "Lütfen bekleyin…" : "Giriş yap"}
             </button>
 
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm">
+              <button
+                type="button"
+                onClick={() => setAdim("kayit")}
+                data-testid="go-register"
+                className="font-semibold text-brand-700 underline-offset-4 hover:underline"
+              >
+                Hesap oluştur
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdim("sifremi-unuttum")}
+                data-testid="go-reset"
+                className="font-semibold text-muted underline-offset-4 hover:text-brand-700 hover:underline"
+              >
+                Şifremi unuttum
+              </button>
+            </div>
             <p className="text-center text-xs leading-relaxed text-muted">
-              Hesabınızı kurumunuzun yöneticisi açar ve giriş bilgileri size
-              iletilir. Kendi kendine kayıt kapalı: bir raporun sonucunu takım
-              üyeliği belirliyor ve üyeliğin doğru kişiye ait olduğuna yalnızca
-              yönetici kefil olabilir.
+              Hesabınızı kurumunuzun yöneticisi de açabilir; o durumda giriş
+              bilgileri size iletilir. Kendiniz kayıt olursanız sonucunuzu
+              görebilmek için e-posta adresinizi doğrulamanız gerekir.
             </p>
           </form>
         )}

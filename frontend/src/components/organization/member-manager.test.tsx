@@ -176,7 +176,14 @@ describe("MemberManager", () => {
 
     await user.type(screen.getByTestId("member-search"), "ogrenci");
 
-    await waitFor(() => expect(sorguParametreleri(fetchMock).get("q")).toBe("ogrenci"));
+    // GECIKME PAYI: arama kutusu 300ms bekliyor ve `waitFor`un 1 saniyelik
+    // varsayilani tam takim yukunde yetmiyordu - test tek basina geciyor,
+    // hep birlikte dusuyordu. Kararsiz bir test, olmayan bir testten
+    // kotudur: insanlar "yine o test" deyip gercek hatalari da gormezden
+    // gelmeye baslar.
+    await waitFor(() => expect(sorguParametreleri(fetchMock).get("q")).toBe("ogrenci"), {
+      timeout: 4000,
+    });
     await waitFor(() =>
       expect(screen.queryByTestId("member-hakem@cbu.edu.tr")).not.toBeInTheDocument(),
     );
@@ -232,7 +239,9 @@ describe("MemberManager", () => {
     await waitFor(() => expect(sorguParametreleri(fetchMock).get("offset")).toBe("25"));
 
     await user.type(screen.getByTestId("member-search"), "uye01");
-    await waitFor(() => expect(sorguParametreleri(fetchMock).get("q")).toBe("uye01"));
+    await waitFor(() => expect(sorguParametreleri(fetchMock).get("q")).toBe("uye01"), {
+      timeout: 4000,
+    });
     expect(sorguParametreleri(fetchMock).get("offset")).toBe("0");
   });
 
@@ -321,6 +330,8 @@ describe("MemberManager", () => {
 
     await user.type(screen.getByTestId("member-search"), "boyle-biri-yok");
 
-    expect(await screen.findByTestId("member-empty")).toHaveTextContent(/filtreye uyan/i);
+    expect(
+      await screen.findByTestId("member-empty", {}, { timeout: 4000 }),
+    ).toHaveTextContent(/filtreye uyan/i);
   });
 });

@@ -603,16 +603,23 @@ async def upload_report(
         if takim is None or not tenancy.ayni_kurum_mu(takim, current_user):
             raise HTTPException(status_code=404, detail="Takim bulunamadi.")
 
-    # Proje adi verilmediyse dosya adindan turetiliyor; o da bos cikarsa
-    # dosyanin kendi adi kullaniliyor. UYDURMUYORUZ ("Isimsiz Rapor" gibi
-    # bir sey, gercekten adi olmayan raporlari ayirt edilemez kilardi).
+    # Proje adi verilmediyse dosya adindan turetiliyor.
+    #
+    # DOSYA ADINA DUSMUYORUZ: dosya adi cogu zaman SADECE e-postalardan
+    # olusuyor ("ali@x.com_veli@y.com.pdf") ve onu proje adi olarak yazmak,
+    # kullanicinin sikayet ettigi ekrani birebir uretirdi - listede proje adi
+    # sutununda e-posta adresleri gorunuyordu.
+    #
+    # Bunun yerine TAKIM ADINA dusuyoruz: adi olmayan bir raporu listede
+    # ayirt etmenin en dogru yolu kimin gonderdigi. "Isimsiz Rapor" gibi bir
+    # sey UYDURMUYORUZ - o da butun adsiz raporlari ayirt edilemez kilardi.
     if not (project_name or "").strip():
         if cozum is None:
             try:
                 cozum = dosya_adi.cozumle(file.filename or "")
             except dosya_adi.DosyaAdiHatasi:
                 cozum = {"proje_adi": None}
-        project_name = cozum.get("proje_adi") or (file.filename or "Rapor")
+        project_name = cozum.get("proje_adi") or (takim.name if takim else None) or "Rapor"
 
     category = db.query(models.Category).filter(models.Category.id == category_id).first()
     if category is not None and not tenancy.ayni_kurum_mu(category, current_user):
