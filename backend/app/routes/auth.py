@@ -256,11 +256,26 @@ def password_reset_request(
     """
     eposta = (govde.email or "").strip().lower()
     kullanici = db.query(models.User).filter(func.lower(models.User.email) == eposta).first()
+    jeton = None
     if kullanici is not None and not jetonlar.cok_sik_mi(db, kullanici.id, jetonlar.SIFIRLAMA):
         jeton = jetonlar.uret(db, kullanici.id, jetonlar.SIFIRLAMA)
         background_tasks.add_task(notify.sifirlama_mektubu, eposta, jeton)
         db.commit()
-    return {"message": "Bu adres kayitliysa sifirlama baglantisi gonderildi."}
+    return {
+        "message": "Bu adres kayitliysa sifirlama baglantisi gonderildi.",
+        # YALNIZCA GELISTIRMEDE dolu (DEV_EXPOSE_EMAIL_TOKEN=1 ve SMTP disi).
+        #
+        # Bu alan uretimde acik olsaydi ucu bir VARLIK KAHINI yapardi: dolu
+        # gelmesi "bu adres kayitli" demek olurdu. Bilincli olarak
+        # dogrulama jetonuyla AYNI bayraga bagli - biri kapaliysa digeri de
+        # kapali ve bayrak acikken sunucu acilista uyari basiyor.
+        #
+        # NEDEN VAR: SMTP ayarlanmadan "sifremi unuttum" akisi hic
+        # denenemiyordu. Kullanicinin bildirdigi "sifirlama e-postasi
+        # gelmedi" durumunun sebebi buydu ve gelistirmede zinciri
+        # tamamlayacak bir yol gerekiyordu.
+        "dev_token": jeton if notify.jeton_yanitta_gorunsun_mu() else None,
+    }
 
 
 @router.post("/password-reset/confirm")

@@ -85,6 +85,20 @@ def kullanici_ac(email, roller, sifre="password", org="org-t3"):
         db.close()
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _test_postasi_gecici_dizine(tmp_path_factory):
+    """Test mektuplari DEPOYA degil gecici dizine yazilsin.
+
+    NEDEN: `EMAIL_BACKEND` varsayilani `file` ve kutu yolu `outbox` -
+    yani testler `backend/outbox/` altina onlarca .eml birakiyordu.
+    .gitignore'da oldugu icin commit'e girmiyordu ama gercek mektuplarla
+    karisiyor ve `scripts/mail-dene.py` ciktisini kirletiyordu: "son 5
+    mektup" listesinde test adresleri gorunuyordu.
+    """
+    os.environ["EMAIL_OUTBOX"] = str(tmp_path_factory.mktemp("outbox"))
+    yield
+
+
 @pytest.fixture(scope="function")
 def db_session():
     Base.metadata.create_all(bind=engine)

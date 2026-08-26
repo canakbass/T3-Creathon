@@ -343,18 +343,53 @@ def test_sifirlama_calisiyor(client):
         db.close()
 
 
-def test_sifirlama_istegi_VARLIK_KAHINI_degil(client):
-    """Kayitli ve kayitsiz adres AYNI cevabi vermeli.
+def test_sifirlama_istegi_VARLIK_KAHINI_degil(client, monkeypatch):
+    """URETIM DAVRANISI: kayitli ve kayitsiz adres AYNI cevabi vermeli.
 
     Ayrilsaydi herhangi biri adres deneyerek sistemde kimin hesabi oldugunu
     ogrenirdi. SMTP istek icinde beklenseydi ZAMANLAMA farki da olcum
     verirdi; gonderim arka plan gorevine alindi.
+
+    BAYRAGI ACIKCA KAPATIYORUZ: `DEV_EXPOSE_EMAIL_TOKEN` yalnizca
+    gelistirmede acik ve acikken yaniti FARKLILASTIRIYOR (kayitli adres
+    baglantiyi geri aliyor). Testin sinadigi sey uretim sozlesmesi, o yuzden
+    bayrak kapali olmali - aksi halde bu test uretimde bir seyin bozuldugunu
+    hicbir zaman fark etmezdi.
     """
+    monkeypatch.setenv("DEV_EXPOSE_EMAIL_TOKEN", "0")
     kullanici_ac("var@t3.org", ["REFEREE"], "parola1234")
     a = client.post("/api/auth/password-reset/request", json={"email": "var@t3.org"})
     b = client.post("/api/auth/password-reset/request", json={"email": "yok@hicbir.org"})
     assert a.status_code == b.status_code == 202
     assert a.json() == b.json()
+    assert a.json()["dev_token"] is None
+
+
+def test_gelistirme_bayragi_ACIKKEN_baglanti_yanitta(client):
+    """GELISTIRME KOLAYLIGI - ve bilincli bir taviz.
+
+    SMTP ayarlanmadan "sifremi unuttum" akisi hic denenemiyordu;
+    kullanicinin "sifirlama e-postasi gelmedi" sikayetinin sebebi buydu.
+    Bayrak acikken baglanti yanitta donuyor.
+
+    TAVIZIN ADI KONUYOR: bu, ucu bir VARLIK KAHINI yapiyor - dolu gelmesi
+    "bu adres kayitli" demek. Bu yuzden bayrak VARSAYILAN KAPALI, `smtp`
+    arka ucunda HIC calismiyor ve acikken sunucu acilista uyari basiyor.
+    """
+    kullanici_ac("dev.kullanici@t3.org", ["REFEREE"], "parola1234")
+    r = client.post(
+        "/api/auth/password-reset/request", json={"email": "dev.kullanici@t3.org"}
+    )
+    assert r.status_code == 202
+    assert r.json()["dev_token"], "gelistirmede baglanti donmeliydi"
+
+    # Ve o baglanti GERCEKTEN calisiyor - yoksa demo edilemezdi.
+    onay = client.post(
+        "/api/auth/password-reset/confirm",
+        json={"token": r.json()["dev_token"], "new_password": "yepyeni1234"},
+    )
+    assert onay.status_code == 200, onay.text[:200]
+    assert _giris(client, "dev.kullanici@t3.org", "yepyeni1234").status_code == 200
 
 
 def test_sifirlama_ESKI_TOKENLARI_dusuruyor(client):

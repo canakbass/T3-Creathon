@@ -261,8 +261,8 @@ export async function resendVerification(email: string): Promise<{ message: stri
  * Şifre sıfırlama isteği. Kayıtlı/kayıtsız AYNI cevabı döner — ayrılsaydı
  * varlık kâhini olurdu.
  */
-export async function requestPasswordReset(email: string): Promise<{ message: string }> {
-  return apiFetch<{ message: string }>("/api/auth/password-reset/request", {
+export async function requestPasswordReset(email: string): Promise<RegistrationResult> {
+  return apiFetch<RegistrationResult>("/api/auth/password-reset/request", {
     method: "POST",
     skipAuth: true,
     json: { email },

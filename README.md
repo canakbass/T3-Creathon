@@ -94,13 +94,50 @@ yöneticinin yaptığı bir eylemden (raporu o e-postayla yüklemesinden) doğar
 olmadan çalınmış bir token, kurban şifresini sıfırladıktan sonra da bir saat
 daha çalışırdı ve sıfırlamanın tek amacı ("hesabı geri al") ortadan kalkardı.
 
-#### SMTP olmadan da çalışıyor
+#### E-posta: durumu görmek ve gerçekten göndermek
 
-`EMAIL_BACKEND=file` (varsayılan) mektupları `backend/outbox/*.eml` olarak
-diske yazar. **Akış birebir gerçek** — jeton üretilir, özeti saklanır, süresi
-işler, bağlantı tıklanır. Demoda outbox dosyasını açıp bağlantıyı
-kopyalayın. Üretimde `EMAIL_BACKEND=smtp` ve dört `SMTP_*` değişkeni yeter;
-kod değişmez (bkz. `backend/.env.example`).
+Ayarları tek komutla görün:
+
+```fish
+cd backend
+../.venv/bin/python ../scripts/mail-dene.py                # durum + son mektuplar
+../.venv/bin/python ../scripts/mail-dene.py ben@ornek.com  # deneme gönder
+```
+
+**Varsayılan `EMAIL_BACKEND=file`** — mektuplar `backend/outbox/*.eml`
+olarak diske yazılır, gerçek gönderim yoktur. "Şifre sıfırlama e-postası
+gelmedi" şikâyetinin sebebi budur ve bir hata değildir. Akış birebir
+gerçektir: jeton üretilir, özeti saklanır, süresi işler, bağlantı tıklanır.
+
+Geliştirmede `DEV_EXPOSE_EMAIL_TOKEN=1` yaparsanız bağlantı doğrudan
+ekranda çıkar; SMTP'siz demo için en pratik yol. **Üretimde kapalı olmalı**
+— açıkken şifre sıfırlama ucu bir varlık kâhinine dönüşür (dolu gelmesi
+"bu adres kayıtlı" demektir) ve sunucu açılışta bunu uyarır.
+
+**Gerçekten göndermek için** (Gmail, ~2 dakika):
+
+1. Google hesabında **iki adımlı doğrulama** açık olmalı.
+2. `myaccount.google.com/apppasswords` → **uygulama şifresi** oluşturun.
+   Normal Gmail şifreniz çalışmaz; Google 2022'den beri kabul etmiyor.
+3. `backend/.env` dosyasına:
+
+```
+EMAIL_BACKEND=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=hesabiniz@gmail.com
+SMTP_PASSWORD=<16 haneli uygulama şifresi>
+SMTP_FROM=hesabiniz@gmail.com
+APP_BASE_URL=http://localhost:3000
+```
+
+4. `mail-dene.py ben@ornek.com` ile doğrulayın — hata varsa nedenini
+   (kimlik doğrulama / port / TLS) doğrudan söyler.
+
+Kod değişmez; Resend, Brevo, kurumsal SMTP hepsi aynı değişkenlerle takılır.
+Bağlantı adresi `APP_BASE_URL`'den üretilir, isteğin `Host` başlığından
+**değil** — host başlığı istemcinin kontrolünde ve ondan üretilseydi
+saldırgan kendi sunucusuna giden bir "doğrulama" bağlantısı ürettirebilirdi.
 
 ### Kurumlar (çok kiracılık)
 

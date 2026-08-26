@@ -63,6 +63,9 @@ export function AccountForm({ onGeriDon, mod }: Props) {
       } else {
         const sonuc = await requestPasswordReset(email);
         setBilgi(sonuc.message);
+        // Geliştirmede sıfırlama bağlantısı da yanıtta dönüyor. SMTP
+        // ayarlanmadan bu akış hiç denenemiyordu.
+        setDevToken(sonuc.dev_token);
       }
     } catch (cause) {
       setHata(describeError(cause));
@@ -88,11 +91,15 @@ export function AccountForm({ onGeriDon, mod }: Props) {
             <p className="mt-2 break-all font-mono text-xs text-emerald-900">
               Geliştirme bağlantısı:{" "}
               <a
-                href={`/dogrula?token=${devToken}`}
+                href={
+                  kayit
+                    ? `/dogrula?token=${devToken}`
+                    : `/sifre-sifirla?token=${devToken}`
+                }
                 data-testid="dev-verify-link"
                 className="underline"
               >
-                /dogrula?token={devToken}
+                {kayit ? "/dogrula" : "/sifre-sifirla"}?token={devToken}
               </a>
             </p>
           ) : null}
