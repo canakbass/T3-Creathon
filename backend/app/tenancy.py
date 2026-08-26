@@ -70,6 +70,14 @@ def ayni_kurum_mu(kayit, user) -> bool:
     kullanici_kurum = aktif_kurum(user)
     if _gecis_toleransi(kayit_kurum, kullanici_kurum):
         return True
+    # KATI modda None == None ESLESME SAYILMAZ.
+    #
+    # Bu satir olmadan, kurumu bos bir kayit ile kurumu bos bir token
+    # birbirine esitleniyordu - yani bayragin kapatmasi gereken tek durum,
+    # bayrak acikken bile aciktan geciyordu. Bayragi denemeden fark
+    # edilemezdi: gevsek modda ayni girdi zaten toleransla geciyor.
+    if kayit_kurum is None or kullanici_kurum is None:
+        return False
     return kayit_kurum == kullanici_kurum
 
 
@@ -137,9 +145,12 @@ def kurumun_rolleri(db: Session, kurum_id: str | None, rol: str) -> list:
     yolu, cunku atama yaparken kimse hakemin hangi kurumda oldugunu
     sormuyordu.
     """
+    # Kurumsuz istek KATI modda HICBIR SEY gormuyor; kontrol sorgudan ONCE
+    # geliyor ki "once kapsamsiz sorguyu kur, sonra vazgec" gibi bir sira
+    # kalmasin.
+    if kurum_id is None and KATI_KURUM:
+        return []
     q = db.query(models.UserRole).filter(models.UserRole.role == rol)
     if kurum_id is not None:
         q = q.filter(models.UserRole.organization_id == kurum_id)
-    elif KATI_KURUM:
-        return []
     return [r.user_id for r in q.all()]

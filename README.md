@@ -530,8 +530,8 @@ rapor yüklerken **hangi takım adına** yüklediğini seçmek zorundadır.
 |---|---|
 | `ai-doc-analysis` | 46 başarılı, 0 başarısız |
 | `ai-scoring` | 102 başarılı, 0 başarısız |
-| `backend` (pytest) | 132 başarılı, 0 başarısız |
-| `frontend` (jest) | 130 başarılı, 0 başarısız |
+| `backend` (pytest) | 139 başarılı, 0 başarısız |
+| `frontend` (jest) | 137 başarılı, 0 başarısız |
 | `scripts/e2e-test.py` (canlı sunucu) | 61 başarılı, 0 başarısız |
 | `frontend` (next build) | başarılı |
 | Uçtan uca — API akışı | 40 başarılı, 0 başarısız |
