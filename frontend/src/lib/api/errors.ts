@@ -15,11 +15,19 @@ export function describeError(cause: unknown): string {
     if (cause.isUnauthorized) {
       return "Oturumunuzun süresi doldu. Lütfen tekrar giriş yapın.";
     }
+    // 403 ve 404'te SUNUCUNUN cümlesi varsa onu gösteriyoruz.
+    //
+    // NEDEN: backend'in yetki mesajları eylem içeriyor — "Yarışma
+    // Yöneticisi rolünü yalnızca kurum sorumlusu verebilir", "Bu hesabın
+    // seçili kurumda bu rolü yok, tekrar giriş yapın". Genel bir "yetkiniz
+    // yok" cümlesi bunları yutuyordu ve kullanıcı ne yapması gerektiğini
+    // bilmeden kalıyordu. Genel cümleler yalnızca gövdesiz bir 403/404
+    // (ör. araya giren bir vekil sunucu) için duruyor.
     if (cause.isForbidden) {
-      return "Bu işlem için yetkiniz yok.";
+      return cause.detail?.trim() || "Bu işlem için yetkiniz yok.";
     }
     if (cause.status === 404) {
-      return "Kayıt bulunamadı.";
+      return cause.detail?.trim() || "Kayıt bulunamadı.";
     }
     return cause.detail;
   }

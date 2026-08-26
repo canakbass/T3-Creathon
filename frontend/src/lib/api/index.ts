@@ -27,6 +27,8 @@ import type {
   WireRationaleDraft,
   WireReferee,
   WireReport,
+  WireOrganization,
+  WireOrganizationMember,
   WireReportLookup,
   WireUser,
 } from "./types";
@@ -36,12 +38,22 @@ export type { CategoryNameMap } from "./mappers";
 
 /* ------------------------------------------------------------------ auth */
 
+export interface Membership {
+  organizationId: string;
+  organizationName: string | null;
+  roles: string[];
+}
+
 export interface Session {
   token: string;
-  /** Kullanıcının sahip olduğu tüm roller. */
+  /** Tüm kurumlardaki rollerin birleşimi. */
   roles: string[];
-  /** Token'ın imzalandığı rol. null ise rol seçimi gerekiyor. */
+  /** Token'ın imzalandığı rol. null ise seçim gerekiyor. */
   activeRole: string | null;
+  /** Token'ın imzalandığı kurum. null ise seçim gerekiyor. */
+  activeOrganizationId: string | null;
+  /** Hangi kurumda hangi roller — seçim ekranı bunu gösteriyor. */
+  memberships: Membership[];
   userId: string;
   email: string;
   fullName: string | null;
@@ -52,6 +64,12 @@ function toSession(wire: WireLoginResponse): Session {
     token: wire.access_token,
     roles: wire.roles ?? [],
     activeRole: wire.active_role,
+    activeOrganizationId: wire.active_organization_id ?? null,
+    memberships: (wire.memberships ?? []).map((m) => ({
+      organizationId: m.organization_id,
+      organizationName: m.organization_name,
+      roles: m.roles ?? [],
+    })),
     userId: wire.user?.id ?? "",
     email: wire.user?.email ?? "",
     fullName: wire.user?.full_name ?? null,
@@ -85,13 +103,57 @@ export async function login(email: string, password: string): Promise<Session> {
  * Yetki kontrolü sunucuda kalıyor: arayüz "ben şimdi hakemim" diyerek rol
  * değiştiremez, rolü token taşıyor ve token'ı yalnızca sunucu imzalayabilir.
  */
-export async function selectRole(role: string, token?: string): Promise<Session> {
+export async function selectRole(
+  role: string,
+  organizationId?: string | null,
+  token?: string,
+): Promise<Session> {
   const wire = await apiFetch<WireLoginResponse>("/api/auth/select-role", {
     method: "POST",
-    json: { role },
+    // Kurum, o role birden fazla kurumda sahipsek ZORUNLU. Backend seçim
+    // yapılmamışsa 400 dönüyor - tahmin etmiyoruz, çünkü yanlış kurumda
+    // işlem yapmak başka bir kurumun verisine dokunmak demek.
+    json: organizationId ? { role, organization_id: organizationId } : { role },
     token,
   });
   return toSession(wire);
+}
+
+/* ---------------------------------------------------------------- kurum */
+
+/**
+ * Kullanıcının HANGİ KURUM ADINA çalıştığı.
+ *
+ * Her role açık: arayüz bunu her ekranda göstermeli. Yanlış kurumda işlem
+ * yapmak başka bir kurumun verisine dokunmak demek.
+ */
+export async function getMyOrganization(): Promise<WireOrganization> {
+  return apiFetch<WireOrganization>("/api/organizations/me");
+}
+
+/** Kurumun üyeleri ve rolleri — yalnızca kurum sorumlusu (ORG_OWNER). */
+export async function listOrganizationMembers(): Promise<WireOrganizationMember[]> {
+  return apiFetch<WireOrganizationMember[]>("/api/organizations/me/members");
+}
+
+export async function grantOrganizationRole(
+  userId: string,
+  role: string,
+): Promise<WireOrganizationMember> {
+  return apiFetch<WireOrganizationMember>(
+    `/api/organizations/me/members/${encodeURIComponent(userId)}/roles`,
+    { method: "POST", json: { role } },
+  );
+}
+
+export async function revokeOrganizationRole(
+  userId: string,
+  role: string,
+): Promise<WireOrganizationMember> {
+  return apiFetch<WireOrganizationMember>(
+    `/api/organizations/me/members/${encodeURIComponent(userId)}/roles/${encodeURIComponent(role)}`,
+    { method: "DELETE" },
+  );
 }
 
 export interface RegisterInput {

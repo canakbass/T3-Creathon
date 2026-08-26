@@ -126,6 +126,36 @@ def main():
     yonetici = {"Authorization": f"Bearer {yon_giris['access_token']}"}
     kontrol("yonetici girisi", yon_giris.get("active_role") == "COMPETITION_MANAGER")
     kontrol(
+        "token KURUMU tasiyor",
+        yon_giris.get("active_organization_id") == "org-t3",
+        f"kurum={yon_giris.get('active_organization_id')}",
+    )
+
+    # KURUM SORUMLUSU: ayricalikli rolleri (yonetici, degerlendirme yoneticisi,
+    # kurum sorumlusu) YALNIZCA o verebiliyor. Yarisma yoneticisi bunlari
+    # dagitabilseydi, tek bir yonetici hesabi ele gecirildiginde saldirgan
+    # kendine sinirsiz yonetici uretebilirdi - yetki yukari dogru
+    # dagitilamaz.
+    sorumlu_giris = c.post(
+        "/api/auth/login",
+        data={
+            "username": "asdfghjkl@gmail.com",
+            "password": "asdfghjkl",
+            "scope": "org-t3:ORG_OWNER",
+        },
+    ).json()
+    sorumlu = {"Authorization": f"Bearer {sorumlu_giris['access_token']}"}
+    kontrol("kurum sorumlusu girisi", sorumlu_giris.get("active_role") == "ORG_OWNER")
+    kontrol(
+        "yonetici AYRICALIKLI rol veremiyor",
+        c.post(
+            "/api/auth/users",
+            json={"email": f"yetki_{EK}@test.org", "roles": ["COMPETITION_MANAGER"]},
+            headers=yonetici,
+        ).status_code
+        == 403,
+    )
+    kontrol(
         "kendi kendine kayit KAPALI",
         c.post(
             "/api/auth/register",
@@ -161,7 +191,7 @@ def main():
     _, cok_giris, cok_tok = kaydol_giris(
         ["COMPETITOR", "REFEREE", "COMPETITION_MANAGER", "EVALUATION_MANAGER"],
         "cok",
-        yonetici,
+        sorumlu,  # ayricalikli roller yalnizca kurum sorumlusundan
     )
     kontrol("cok rollu hesapta otomatik rol atanmiyor", cok_giris.get("active_role") is None)
     kontrol(

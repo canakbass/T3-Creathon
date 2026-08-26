@@ -451,14 +451,14 @@ async def upload_report(
 
     category = db.query(models.Category).filter(models.Category.id == category_id).first()
     if not category:
-        raise HTTPException(status_code=404, detail="Category not found.")
+        raise HTTPException(status_code=404, detail="Kategori bulunamadi.")
 
     # Check file extension
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in [".pdf", ".doc", ".docx"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file type. Upload a PDF or Word document."
+            detail="Desteklenmeyen dosya turu. PDF ya da Word belgesi yukleyin."
         )
         
     report_id = f"RPT-2026-{str(uuid.uuid4())[:6].upper()}"
@@ -680,7 +680,7 @@ def _rapor_getir_yetkiliyse(report_id: str, user: models.User, db: Session) -> m
     """
     report = db.query(models.Report).filter(models.Report.id == report_id).first()
     if not report:
-        raise HTTPException(status_code=404, detail="Report not found.")
+        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
     _rol_yoksa_reddet(user)
 
     # YABANCI KURUM -> 404, kayit hic yokmus gibi. AYNI govde metniyle.
@@ -691,7 +691,7 @@ def _rapor_getir_yetkiliyse(report_id: str, user: models.User, db: Session) -> m
     # varlik kahini (oracle) olur. Kimligi elinde tutan biri, 403 ile 404
     # farkindan baska kurumun basvuru kimliklerini dogrulayabilir.
     if not _ayni_kurum_mu(report, user):
-        raise HTTPException(status_code=404, detail="Report not found.")
+        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
 
     if not _rapora_erisebilir_mi(report, user):
         raise HTTPException(
@@ -1158,7 +1158,7 @@ def submit_decision(
     if report.status == "pending":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Report must be analyzed by AI before referee decision can be made."
+            detail="Hakem karari verilmeden once raporun AI analizi tamamlanmali."
         )
         
     # Check if decision already exists
@@ -1166,7 +1166,7 @@ def submit_decision(
     if existing_decision:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A decision has already been submitted for this report."
+            detail="Bu rapor icin karar zaten verilmis."
         )
         
     # Create decision

@@ -70,7 +70,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+        detail="Oturum dogrulanamadi. Lutfen tekrar giris yapin.",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:

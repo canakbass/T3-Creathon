@@ -2,59 +2,81 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { login as apiLogin, register as apiRegister, selectRole as apiSelectRole, type Session } from "@/lib/api";
+import {
+  login as apiLogin,
+  selectRole as apiSelectRole,
+  type Membership,
+  type Session,
+} from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
-import { ROLE_DEFINITIONS, ROLES, getDashboardPath, isRole, type Role } from "@/lib/roles";
+import { ROLE_DEFINITIONS, getDashboardPath, isRole, type Role } from "@/lib/roles";
 import { useAuthStore } from "@/store/auth-store";
 
 const ROLE_ICON_PATHS: Record<Role, string> = {
+  ORG_OWNER:
+    "M12 2 3 6v6c0 5 3.8 9.3 9 10 5.2-.7 9-5 9-10V6l-9-4Zm0 5a3 3 0 1 1 0 6 3 3 0 0 1 0-6Zm0 12c-2.2 0-4.2-1.1-5.4-2.8.9-1.6 3-2.7 5.4-2.7s4.5 1.1 5.4 2.7C16.2 17.9 14.2 19 12 19Z",
   COMPETITION_MANAGER:
     "M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Zm9-1.7L5.5 9v6L12 18.2 18.5 15V9L12 5.8Z",
-  REFEREE: "M12 2 4 5v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10V5l-8-3Zm0 9.5 3 1.7-.8-3.4 2.6-2.3-3.5-.3L12 4l-1.3 3.2-3.5.3 2.6 2.3-.8 3.4L12 11.5Z",
-  COMPETITOR: "M12 2a5 5 0 0 1 5 5c0 2.2-1.4 4-3.3 4.7L15 21H9l1.3-9.3C8.4 11 7 9.2 7 7a5 5 0 0 1 5-5Z",
+  REFEREE:
+    "M12 2 4 5v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10V5l-8-3Zm0 9.5 3 1.7-.8-3.4 2.6-2.3-3.5-.3L12 4l-1.3 3.2-3.5.3 2.6 2.3-.8 3.4L12 11.5Z",
+  COMPETITOR:
+    "M12 2a5 5 0 0 1 5 5c0 2.2-1.4 4-3.3 4.7L15 21H9l1.3-9.3C8.4 11 7 9.2 7 7a5 5 0 0 1 5-5Z",
   EVALUATION_MANAGER:
     "M4 4h16v3H4V4Zm0 6.5h10v3H4v-3ZM4 17h16v3H4v-3Zm13-6.5h3v3h-3v-3Z",
 };
 
-/** Ekranın hangi adımda olduğu. */
-type Adim = "giris" | "kayit" | "rol-secimi";
-
+/**
+ * Giriş ve KURUM+ROL seçimi.
+ *
+ * NEDEN TEK SEÇİM: kurum ve rol ayrı ayrı seçilseydi "kurum seçildi ama rol
+ * seçilmedi" gibi yarım bir durum oluşurdu ve o yarım oturumun ne göreceği
+ * her ekranda ayrı ayrı düşünülmek zorunda kalırdı. Tek atomik seçim bu
+ * sınıfı tümden yok ediyor.
+ *
+ * NEDEN KAYIT FORMU YOK: kendi kendine kayıt kapalı. Bir raporun sonucunu
+ * TAKIM ÜYELİĞİ belirliyor ve üyelik e-postaya bağlı; kayıt açık olsaydı bir
+ * takım üyesinin e-postasını ilk kaydettiren kişi o takımın sonuçlarını
+ * görürdü. Hesapları yönetici açıyor (bkz. AccountCreator). Formu burada
+ * tutmak, her denemede 403 dönen ölü bir yol bırakmak olurdu.
+ */
 export function RoleSelectionScreen() {
   const router = useRouter();
   const signIn = useAuthStore((state) => state.signIn);
 
-  const [adim, setAdim] = useState<Adim>("giris");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
-  const [kayitRolleri, setKayitRolleri] = useState<Role[]>(["COMPETITOR"]);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Rol seçimi adımında elde tutulan oturum (token alındı, rol seçilmedi).
+  // Seçim adımında elde tutulan oturum (token alındı, kurum+rol seçilmedi).
   const [bekleyen, setBekleyen] = useState<Session | null>(null);
 
-  function oturumuKur(session: Session) {
+  function oturumuKur(session: Session, kurum: Membership | null) {
     signIn({
       token: session.token,
       role: session.activeRole ?? "",
       roles: session.roles,
+      organizationId: session.activeOrganizationId,
+      organizationName: kurum?.organizationName ?? null,
+      memberships: session.memberships,
       email: session.email,
       userId: session.userId,
       fullName: session.fullName,
     });
   }
 
-  /** Oturum tamamsa panele gider; rol seçilmemişse seçim adımına geçer. */
+  /** Oturum tamamsa panele gider; seçim gerekiyorsa seçim adımına geçer. */
   function oturumuIsle(session: Session) {
     if (session.activeRole && isRole(session.activeRole)) {
-      oturumuKur(session);
+      const kurum =
+        session.memberships.find(
+          (m) => m.organizationId === session.activeOrganizationId,
+        ) ?? null;
+      oturumuKur(session, kurum);
       router.push(getDashboardPath(session.activeRole));
       return;
     }
-    // Birden fazla rol var, kullanıcı hangisiyle devam edeceğini seçmeli.
     setBekleyen(session);
-    setAdim("rol-secimi");
   }
 
   async function handleLogin(event: React.FormEvent<HTMLFormElement>) {
@@ -70,35 +92,15 @@ export function RoleSelectionScreen() {
     }
   }
 
-  async function handleRegister(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (kayitRolleri.length === 0) {
-      setError("En az bir rol seçin.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await apiRegister({ email, password, fullName, roles: kayitRolleri });
-      // Kayıttan sonra doğrudan giriş yapıyoruz - kullanıcıyı ikinci kez
-      // form doldurmaya zorlamanın bir faydası yok.
-      oturumuIsle(await apiLogin(email, password));
-    } catch (cause) {
-      setError(describeError(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleSelectRole(role: Role) {
+  async function handleSelect(kurum: Membership, role: Role) {
     if (!bekleyen) return;
     setBusy(true);
     setError(null);
     try {
-      // Sunucu, seçilen role göre YENİ bir token imzalıyor. Arayüz kendi
-      // başına rol değiştiremez.
-      const session = await apiSelectRole(role, bekleyen.token);
-      oturumuKur(session);
+      // Sunucu, seçilen KURUM+ROL'e göre YENİ bir token imzalıyor. Arayüz
+      // kendi başına ne rol ne kurum değiştirebilir.
+      const session = await apiSelectRole(role, kurum.organizationId, bekleyen.token);
+      oturumuKur(session, kurum);
       router.push(getDashboardPath(role));
     } catch (cause) {
       setError(describeError(cause));
@@ -107,17 +109,7 @@ export function RoleSelectionScreen() {
     }
   }
 
-  function rolDegistir(role: Role) {
-    setKayitRolleri((mevcut) =>
-      mevcut.includes(role) ? mevcut.filter((r) => r !== role) : [...mevcut, role],
-    );
-  }
-
-  function modDegistir(yeni: Adim) {
-    setAdim(yeni);
-    setError(null);
-    setInfo(null);
-  }
+  const secimGerekli = bekleyen !== null;
 
   return (
     <main className="flex min-h-screen w-full flex-col items-center justify-center bg-background px-4 py-16">
@@ -127,16 +119,12 @@ export function RoleSelectionScreen() {
             AI Destekli Değerlendirme Sistemi
           </span>
           <h1 className="mt-4 text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl">
-            {adim === "kayit"
-              ? "Hesap oluşturun"
-              : adim === "rol-secimi"
-                ? "Hangi rolle devam edeceksiniz?"
-                : "Giriş yapın"}
+            {secimGerekli ? "Hangi kurum adına devam edeceksiniz?" : "Giriş yapın"}
           </h1>
           <p className="mt-3 text-sm text-muted sm:text-base">
-            {adim === "rol-secimi"
-              ? "Hesabınızın birden fazla rolü var. Bu oturumda kullanacağınız rolü seçin."
-              : "TEKNOFEST rapor değerlendirme paneline erişmek için."}
+            {secimGerekli
+              ? "Birden fazla seçeneğiniz var. Bu oturumda kullanacağınız kurumu ve rolü seçin."
+              : "Rapor ve belge değerlendirme paneline erişmek için."}
           </p>
         </div>
 
@@ -158,45 +146,68 @@ export function RoleSelectionScreen() {
           </div>
         ) : null}
 
-        {adim === "rol-secimi" ? (
+        {secimGerekli ? (
           <>
-            <div
-              role="radiogroup"
-              aria-label="Rolünüzü seçin"
-              className="grid grid-cols-1 gap-4 sm:grid-cols-2"
-            >
-              {(bekleyen?.roles ?? []).filter(isRole).map((role) => {
-                const definition = ROLE_DEFINITIONS[role];
-                return (
-                  <button
-                    key={role}
-                    type="button"
-                    role="radio"
-                    aria-checked="false"
-                    disabled={busy}
-                    data-testid={`role-card-${role}`}
-                    onClick={() => handleSelectRole(role)}
-                    className="group flex flex-col items-start gap-3 rounded-2xl border border-border bg-surface p-6 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+            <div className="flex flex-col gap-6" data-testid="membership-picker">
+              {(bekleyen?.memberships ?? []).map((kurum) => (
+                <section key={kurum.organizationId}>
+                  {/* Kurum adı BAŞLIK olarak duruyor, rol kartının içinde bir
+                      etiket olarak değil: aynı rol iki kurumda da olabilir ve
+                      kullanıcının önce "hangi kurum" sorusunu cevaplaması
+                      gerekiyor. */}
+                  <h2
+                    data-testid={`org-heading-${kurum.organizationId}`}
+                    className="mb-3 text-sm font-bold uppercase tracking-wide text-brand-700"
                   >
-                    <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600 transition group-hover:bg-brand-100">
-                      <svg viewBox="0 0 24 24" fill="currentColor" className="h-6 w-6" aria-hidden="true">
-                        <path d={ROLE_ICON_PATHS[role]} />
-                      </svg>
-                    </span>
-                    <span className="text-base font-bold text-foreground">{definition.label}</span>
-                    <span className="text-sm leading-relaxed text-muted">
-                      {definition.description}
-                    </span>
-                  </button>
-                );
-              })}
+                    {kurum.organizationName ?? kurum.organizationId}
+                  </h2>
+                  <div
+                    role="radiogroup"
+                    aria-label={`${kurum.organizationName ?? kurum.organizationId} rolleri`}
+                    className="grid grid-cols-1 gap-4 sm:grid-cols-2"
+                  >
+                    {kurum.roles.filter(isRole).map((role) => {
+                      const definition = ROLE_DEFINITIONS[role];
+                      return (
+                        <button
+                          key={role}
+                          type="button"
+                          role="radio"
+                          aria-checked="false"
+                          disabled={busy}
+                          data-testid={`role-card-${kurum.organizationId}-${role}`}
+                          onClick={() => handleSelect(kurum, role)}
+                          className="group flex flex-col items-start gap-3 rounded-2xl border border-border bg-surface p-6 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600 transition group-hover:bg-brand-100">
+                            <svg
+                              viewBox="0 0 24 24"
+                              fill="currentColor"
+                              className="h-6 w-6"
+                              aria-hidden="true"
+                            >
+                              <path d={ROLE_ICON_PATHS[role]} />
+                            </svg>
+                          </span>
+                          <span className="text-base font-bold text-foreground">
+                            {definition.label}
+                          </span>
+                          <span className="text-sm leading-relaxed text-muted">
+                            {definition.description}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
             </div>
-            <div className="mt-6 text-center">
+            <div className="mt-8 text-center">
               <button
                 type="button"
                 onClick={() => {
                   setBekleyen(null);
-                  modDegistir("giris");
+                  setError(null);
                 }}
                 className="text-sm font-semibold text-muted underline-offset-4 transition hover:text-brand-700 hover:underline"
               >
@@ -206,24 +217,10 @@ export function RoleSelectionScreen() {
           </>
         ) : (
           <form
-            onSubmit={adim === "kayit" ? handleRegister : handleLogin}
-            data-testid={adim === "kayit" ? "register-form" : "login-form"}
+            onSubmit={handleLogin}
+            data-testid="login-form"
             className="flex flex-col gap-4 rounded-2xl border border-border bg-surface p-6 shadow-sm"
           >
-            {adim === "kayit" ? (
-              <label className="flex flex-col gap-1.5">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-                  Ad Soyad
-                </span>
-                <input
-                  type="text"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-                />
-              </label>
-            ) : null}
-
             <label className="flex flex-col gap-1.5">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted">
                 E-posta
@@ -245,71 +242,51 @@ export function RoleSelectionScreen() {
               <input
                 type="password"
                 required
-                autoComplete={adim === "kayit" ? "new-password" : "current-password"}
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
               />
             </label>
 
-            {adim === "kayit" ? (
-              <fieldset className="flex flex-col gap-2">
-                <legend className="text-xs font-semibold uppercase tracking-wide text-muted">
-                  Rolleriniz (birden fazla seçebilirsiniz)
-                </legend>
-                <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {ROLES.map((role) => (
-                    <label
-                      key={role}
-                      className="flex cursor-pointer items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm text-foreground transition hover:border-brand-300"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={kayitRolleri.includes(role)}
-                        onChange={() => rolDegistir(role)}
-                        data-testid={`register-role-${role}`}
-                        className="h-4 w-4"
-                      />
-                      {ROLE_DEFINITIONS[role].label}
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-            ) : null}
-
             <button
               type="submit"
               disabled={busy}
               className="mt-2 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {busy ? "Lütfen bekleyin…" : adim === "kayit" ? "Kaydol" : "Giriş yap"}
+              {busy ? "Lütfen bekleyin…" : "Giriş yap"}
             </button>
 
-            <p className="text-center text-sm text-muted">
-              {adim === "kayit" ? "Zaten hesabınız var mı? " : "Hesabınız yok mu? "}
-              <button
-                type="button"
-                onClick={() => modDegistir(adim === "kayit" ? "giris" : "kayit")}
-                className="font-semibold text-brand-700 underline-offset-4 hover:underline"
-              >
-                {adim === "kayit" ? "Giriş yapın" : "Kaydolun"}
-              </button>
+            <p className="text-center text-xs leading-relaxed text-muted">
+              Hesabınızı kurumunuzun yöneticisi açar ve giriş bilgileri size
+              iletilir. Kendi kendine kayıt kapalı: bir raporun sonucunu takım
+              üyeliği belirliyor ve üyeliğin doğru kişiye ait olduğuna yalnızca
+              yönetici kefil olabilir.
             </p>
           </form>
         )}
 
-        {adim === "giris" ? (
+        {!secimGerekli ? (
           <details className="mx-auto mt-6 max-w-md rounded-xl border border-border bg-surface/60 px-4 py-3 text-sm">
             <summary className="cursor-pointer font-semibold text-muted">
               Demo hesapları
             </summary>
             <div className="mt-3 flex flex-col gap-2 text-xs text-muted">
               <p>
-                <span className="font-semibold text-foreground">Tüm roller (test):</span>{" "}
+                <span className="font-semibold text-foreground">
+                  T3 Vakfı — tüm roller:
+                </span>{" "}
                 asdfghjkl@gmail.com / asdfghjkl
               </p>
-              <p>manager@teknofest.org · referee@teknofest.org · competitor@teknofest.org · evaluator@teknofest.org</p>
-              <p>Hepsinin şifresi: password123</p>
+              <p>manager@teknofest.org · referee@teknofest.org · competitor@teknofest.org (password123)</p>
+              {/* İkinci kurum: "A kurumu B'yi göremiyor" kuralı ancak karşı
+                  tarafta gerçek hesaplar varsa denenebilir. */}
+              <p>
+                <span className="font-semibold text-foreground">
+                  Manisa CBÜ — ayrı kurum:
+                </span>{" "}
+                sorumlu@cbu.edu.tr · ogretim@cbu.edu.tr (parola123)
+              </p>
               <button
                 type="button"
                 onClick={() => {

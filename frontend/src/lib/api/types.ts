@@ -26,12 +26,45 @@ export interface WireUser {
  * `active_role` null ise kullanıcının birden fazla rolü var ve henüz
  * seçmemiş — arayüz rol seçim ekranı göstermeli.
  */
+/** Bir kurumdaki üyelik: rol artık tek başına bir kimlik değil. */
+export interface WireMembership {
+  organization_id: string;
+  organization_name: string | null;
+  roles: string[];
+}
+
 export interface WireLoginResponse {
   access_token: string;
   token_type: string;
+  /** TÜM kurumlardaki rollerin birleşimi — geriye dönük uyumluluk için. */
   roles: string[];
   active_role: string | null;
+  /**
+   * Token'ın imzalandığı KURUM. null ise seçim gerekiyor.
+   *
+   * Rol ve kurum AYRI AYRI seçilmez: "kurum seçildi ama rol seçilmedi" gibi
+   * yarım bir durumun ne göreceği her ekranda ayrı ayrı düşünülmek zorunda
+   * kalırdı.
+   */
+  active_organization_id: string | null;
+  memberships: WireMembership[];
   user: WireUser;
+}
+
+export interface WireOrganization {
+  id: string;
+  name: string;
+  slug: string;
+  my_roles: string[];
+  member_count: number;
+}
+
+export interface WireOrganizationMember {
+  id: string;
+  email: string;
+  full_name: string | null;
+  /** YALNIZCA bu kurumdaki roller. */
+  roles: string[];
 }
 
 /** Yarışmanın değerlendirme kriteri (ağırlığıyla). */

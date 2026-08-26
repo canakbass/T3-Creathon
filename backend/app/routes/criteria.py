@@ -84,7 +84,7 @@ def create_criteria(
     if not category:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Category not found."
+            detail="Kategori bulunamadi."
         )
         
     crit_id = str(uuid.uuid4())

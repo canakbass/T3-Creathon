@@ -61,7 +61,7 @@ function mockUploadFetch(
     if (url.includes("/api/categories")) return jsonResponse(200, CATEGORIES);
     if (url.includes("/api/reports/upload")) {
       if (uploadStatus !== 201) {
-        return jsonResponse(uploadStatus, { detail: "Category not found." });
+        return jsonResponse(uploadStatus, { detail: "Kategori bulunamadi." });
       }
       return jsonResponse(201, reportBody);
     }
@@ -172,7 +172,10 @@ describe("ReportUpload", () => {
 
     const item = screen.getByTestId("upload-item-evaluation-report.pdf");
     await waitFor(() => expect(item).toHaveAttribute("data-status", "error"));
-    expect(item).toHaveTextContent(/kayıt bulunamadı/i);
+    // Sunucunun CÜMLESİ gösterilmeli, genel bir "kayıt bulunamadı" değil:
+    // hangi kaydın eksik olduğunu yalnızca sunucu biliyor ve yöneticinin
+    // düzeltmesi gereken şey o.
+    expect(item).toHaveTextContent(/kategori bulunamadi/i);
   });
 
   it("accepts Word documents as valid uploads", async () => {

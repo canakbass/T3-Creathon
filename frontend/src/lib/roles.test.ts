@@ -1,8 +1,13 @@
 import { getDashboardPath, isRole, ROLE_DEFINITIONS, ROLES } from "./roles";
 
 describe("roles", () => {
-  it("defines exactly the four required system roles", () => {
+  it("şartnamedeki dört rolü ve kurum sorumlusunu tanımlar", () => {
+    // ORG_OWNER şartnamedeki dört role SONRADAN eklendi: dört rol "bu kurumda
+    // kim ne yapar" sorusunu cevaplıyordu ama "bu kurumda KİM VAR" sorusunu
+    // kimse cevaplamıyordu - sonuçta her yönetici sınırsız yönetici
+    // üretebiliyordu.
     expect(ROLES).toEqual([
+      "ORG_OWNER",
       "COMPETITION_MANAGER",
       "REFEREE",
       "COMPETITOR",
@@ -19,6 +24,7 @@ describe("roles", () => {
   });
 
   it("resolves the exact dashboard path documented for each role", () => {
+    expect(getDashboardPath("ORG_OWNER")).toBe("/dashboard/organization");
     expect(getDashboardPath("COMPETITION_MANAGER")).toBe("/dashboard/manager");
     expect(getDashboardPath("REFEREE")).toBe("/dashboard/referee");
     expect(getDashboardPath("COMPETITOR")).toBe("/dashboard/competitor");

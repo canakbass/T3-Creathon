@@ -1,4 +1,5 @@
 export const ROLES = [
+  "ORG_OWNER",
   "COMPETITION_MANAGER",
   "REFEREE",
   "COMPETITOR",
@@ -15,6 +16,16 @@ export interface RoleDefinition {
 }
 
 export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
+  // Kurum sorumlusu, sartnamedeki dort role sonradan eklendi: dort rol "bu
+  // kurumda kim ne yapar" sorusunu cevapliyordu ama "bu kurumda KIM VAR"
+  // sorusunu kimse cevaplamiyordu.
+  ORG_OWNER: {
+    role: "ORG_OWNER",
+    label: "Kurum Sorumlusu",
+    description:
+      "Kurumun üyelerini ve rollerini yönetir; kurumun tüm değerlendirmelerini görür.",
+    dashboardPath: "/dashboard/organization",
+  },
   COMPETITION_MANAGER: {
     role: "COMPETITION_MANAGER",
     label: "Yarışma Yöneticisi",
