@@ -197,9 +197,16 @@ def main():
         json={"email": f"kendi_kaydi_{EK}@test.org"},
     )
     b = c.post("/api/auth/password-reset/request", json={"email": "hic.yok@hicbir.org"})
+    # KARSILASTIRMA `message` UZERINDEN: `dev_token` yalnizca gelistirme
+    # bayragi (DEV_EXPOSE_EMAIL_TOKEN) acikken dolu ve o bayrak acikken
+    # yaniti KASITLI olarak farklilastiriyor - SMTP'siz demo icin gerekli.
+    # Uretimde bayrak kapali ve govdeler birebir ayni oluyor; bunu
+    # backend/tests/test_kayit_dogrulama.py bayragi acikca kapatarak
+    # siniyor. Burada uretimde de gecerli olan kismi dogruluyoruz.
     kontrol(
         "sifirlama istegi varlik kahini DEGIL",
-        a.status_code == b.status_code == 202 and a.json() == b.json(),
+        a.status_code == b.status_code == 202
+        and a.json()["message"] == b.json()["message"],
         f"{a.status_code}/{b.status_code}",
     )
 
