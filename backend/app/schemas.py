@@ -121,6 +121,15 @@ class OrganizationMemberPage(BaseModel):
     offset: int
 
 
+class OrganizationCreate(BaseModel):
+    """Kullanicinin kendi kurumunu acmasi.
+
+    Yalnizca AD isteniyor: slug adan turetiliyor. Kullanicidan slug istemek,
+    anlamini bilmedigi bir alani doldurmaya zorlamakti.
+    """
+    name: str
+
+
 class RoleGrant(BaseModel):
     role: str
 
@@ -165,6 +174,13 @@ class CompetitionTemplate(BaseModel):
     """Yarismanin sablon kurallari - AI dil/sablon/baslik kontrolu bunlari kullanir."""
     # Bu sablonun ait oldugu rapor asamasi (bkz. models.Competition.report_type_name).
     report_type_name: Optional[str] = Field(default=None, max_length=80)
+    # YARISMANIN AMACI ve RAPORDAN BEKLENTILER.
+    #
+    # Sinir 4000 karakter: bir amac metni icin fazlasiyla yeterli, ama
+    # sinirsiz birakmak veri tabanina ve her yanit govdesine kontrolsuz
+    # buyume demek olurdu.
+    purpose: Optional[str] = Field(default=None, max_length=4000)
+    report_expectations: Optional[str] = Field(default=None, max_length=4000)
     accepted_languages: List[str] = ["tr"]
     required_headings: List[str]
     heading_synonyms: Optional[Dict[str, List[str]]] = None
@@ -177,7 +193,10 @@ class CompetitionTemplate(BaseModel):
 
 class CriterionInput(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    description: Optional[str] = None
+    # Kriterin ACIKLAMASI: "bu kriterde tam olarak neye bakiyoruz".
+    # Hakem puanlarken bunu goruyor; olmadiginda "Ozgunluk %40" ifadesinin
+    # ne anlama geldigi her hakemin kendi yorumuna kaliyordu.
+    description: Optional[str] = Field(default=None, max_length=1000)
     # Agirlik TEK TEK de dogrulanmali, yalnizca toplamı 100 olsun diye degil:
     # [{"A": 150}, {"B": -50}] toplamı 100 ediyordu ve kabul ediliyordu.
     # Negatif agirlik, agirlikli ortalamada iyi bir kriterin toplami
@@ -257,6 +276,8 @@ class CompetitionResponse(BaseModel):
     submission_deadline: Optional[datetime] = None
     created_at: datetime
     report_type_name: Optional[str] = None
+    purpose: Optional[str] = None
+    report_expectations: Optional[str] = None
     accepted_languages: List[str] = []
     required_headings: List[str] = []
     heading_synonyms: Dict[str, List[str]] = {}

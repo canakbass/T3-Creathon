@@ -40,6 +40,14 @@ const ARAMA_GECIKMESI_MS = 300;
 export function MemberManager() {
   const [uyeler, setUyeler] = useState<WireOrganizationMember[] | null>(null);
   const [toplam, setToplam] = useState(0);
+  // FILTRE VE SAYFA TEK BIR DURUMDA.
+  //
+  // Onceden ayriydilar ve "filtre degisince sayfayi sifirla" ayri bir efektle
+  // yapiliyordu. Sonuc: filtre degistiginde once ESKI sayfa numarasiyla bir
+  // istek gidiyor, ardindan sayfa sifirlanip ikinci bir istek gidiyordu.
+  // Yani her filtre degisiminde bir fazladan istek ve ekranda bir anlik
+  // YANLIS icerik vardi. Ikisini tek `setState` ile degistirince ara durum
+  // hic olusmuyor.
   const [sayfa, setSayfa] = useState(0);
   // Sunucunun GERCEKTEN uyguladigi sayfa penceresi. Kendi sabitimizi
   // kullanmiyoruz: sunucu `limit`i kendi ust siniriyla kirpabilir ve o
@@ -55,15 +63,18 @@ export function MemberManager() {
   // Arama kutusu her tuşta istek atmasın: yönetici "mehmet" yazarken altı
   // ayrı istek gider, cevaplar sırasız dönerse ekranda YANLIŞ sonuç kalır.
   useEffect(() => {
-    const zamanlayici = setTimeout(() => setGecikmisArama(arama), ARAMA_GECIKMESI_MS);
+    const zamanlayici = setTimeout(() => {
+      // Arama ve sayfa AYNI ANDA degisiyor: 4. sayfadayken filtre
+      // daraltilirsa sonuc 1 sayfaya duser ve kullanici BOS bir sayfada
+      // kalirdi. Ayri ayri degistirilseydi arada eski sayfa numarasiyla bir
+      // istek giderdi.
+      setGecikmisArama((onceki) => {
+        if (onceki !== arama) setSayfa(0);
+        return arama;
+      });
+    }, ARAMA_GECIKMESI_MS);
     return () => clearTimeout(zamanlayici);
   }, [arama]);
-
-  // Filtre değişince ilk sayfaya dön: 4. sayfadayken filtre daraltılırsa
-  // sonuç 1 sayfaya düşer ve kullanıcı BOŞ bir sayfada kalırdı.
-  useEffect(() => {
-    setSayfa(0);
-  }, [rol, gecikmisArama]);
 
   // Sıra numarası: yalnızca EN SON istek ekrana yazsın. Yavaş dönen eski bir
   // istek, yeni sonucun üstüne yazarsa kullanıcı filtresine uymayan bir liste
@@ -166,7 +177,10 @@ export function MemberManager() {
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={rol}
-            onChange={(e) => setRol(e.target.value)}
+            onChange={(e) => {
+              setRol(e.target.value);
+              setSayfa(0);
+            }}
             data-testid="member-role-filter"
             aria-label="Role göre filtrele"
             className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground"

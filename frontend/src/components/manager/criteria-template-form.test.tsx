@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CriteriaTemplateForm } from "./criteria-template-form";
 
@@ -96,7 +96,7 @@ describe("CriteriaTemplateForm", () => {
     expect(onSaved).toHaveBeenCalledWith(
       expect.objectContaining({
         reportTypeName: "Kritik Tasarım Raporu",
-        metrics: [{ name: "Teknik uygulanabilirlik", weight: 100 }],
+        metrics: [{ name: "Teknik uygulanabilirlik", weight: 100, description: "" }],
         requiredHeadings: [{ value: "Özet" }],
       }),
     );
@@ -119,5 +119,59 @@ describe("CriteriaTemplateForm", () => {
     await user.click(within(banner).getByRole("button", { name: /kapat/i }));
 
     expect(screen.queryByTestId("template-saved-banner")).not.toBeInTheDocument();
+  });
+
+  it("yarışmanın AMACI ve rapordan BEKLENTİLER gönderiliyor", async () => {
+    // Şartname yöneticinin görevini "şablonu, KATEGORİ BİLGİLERİNİ ve
+    // kriterleri TANIMLAR" diye yazıyor; formda yalnızca başlıklar,
+    // ağırlıklar ve ad vardı. "Bu yarışma ne için var, rapordan ne
+    // bekleniyor" sorusunun cevabını yazacak yer YOKTU.
+    const onSaved = jest.fn();
+    const user = userEvent.setup();
+    render(<CriteriaTemplateForm onSaved={onSaved} />);
+
+    await user.type(
+      screen.getByLabelText(/rapor türü/i),
+      "Kritik Tasarım Raporu",
+    );
+    await user.type(
+      screen.getByTestId("template-purpose"),
+      "Lise öğrencilerini havacılıkta yapay zekâya yönlendirmek.",
+    );
+    await user.type(
+      screen.getByTestId("template-expectations"),
+      "Özgün problem tanımı ve ölçülebilir sonuç.",
+    );
+    await user.type(screen.getByLabelText(/metrik 1 adı/i), "Özgünlük");
+    await fillWeight(user, 0, "100");
+    await user.type(
+      screen.getByTestId("metric-description-0"),
+      "Fikrin literatürdeki benzerlerinden farkı anlatılmalı.",
+    );
+    await user.type(screen.getByLabelText(/^zorunlu başlık 1$/i), "Özet");
+    await user.click(screen.getByRole("button", { name: /şablonu kaydet/i }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(onSaved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purpose: "Lise öğrencilerini havacılıkta yapay zekâya yönlendirmek.",
+        reportExpectations: "Özgün problem tanımı ve ölçülebilir sonuç.",
+        metrics: [
+          {
+            name: "Özgünlük",
+            weight: 100,
+            description: "Fikrin literatürdeki benzerlerinden farkı anlatılmalı.",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("amaç ve beklentiler İSTEĞE BAĞLI — boşken de kaydediliyor", () => {
+    // Zorunlu yapmak, hızlıca bir yarışma kurmak isteyen yöneticiyi
+    // kompozisyon yazmaya mecbur bırakırdı.
+    render(<CriteriaTemplateForm onSaved={jest.fn()} />);
+    expect(screen.getByTestId("template-purpose")).not.toBeRequired();
+    expect(screen.getByTestId("template-expectations")).not.toBeRequired();
   });
 });

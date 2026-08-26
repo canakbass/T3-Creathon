@@ -49,6 +49,8 @@ interface Sonuc {
   eposta: string;
   sifre?: string;
   hata?: string;
+  /** Sunucunun kendi cümlesi (örn. "başka kurumda kayıtlıydı, üyelik eklendi"). */
+  not?: string;
 }
 
 export function AccountCreator({ teamId }: { teamId?: string | null }) {
@@ -101,7 +103,20 @@ export function AccountCreator({ teamId }: { teamId?: string | null }) {
           roles: [rol],
           teamId: takim.trim() || null,
         });
-        toplanan.push({ eposta: d.email, sifre: d.temporary_password });
+        // ŞİFRE YOKSA DA BAŞARI. Adres BAŞKA BİR KURUMDA zaten kayıtlıysa
+        // sunucu yeni hesap açmıyor, bu kuruma ÜYELİK ekliyor ve mevcut
+        // şifreyi değiştirmiyor (değiştirseydi bir kurumun yöneticisi o
+        // kişinin başka kurumdaki oturumunu düşürebilirdi).
+        //
+        // Önceden başarı ölçütü "şifre döndü mü" idi ve bu durum HATA
+        // sayılıyordu: ekran "0 hesap açıldı · 1 hata" yazıyordu ama işlem
+        // gerçekte BAŞARILIYDI. Yönetici hem paniğe kapılıyor hem de o
+        // kişiyi tekrar eklemeye çalışıyordu.
+        toplanan.push({
+          eposta: d.email,
+          sifre: d.temporary_password ?? undefined,
+          not: d.temporary_password ? undefined : d.notice,
+        });
       } catch (cause) {
         toplanan.push({ eposta, hata: describeError(cause) });
       }
@@ -111,7 +126,9 @@ export function AccountCreator({ teamId }: { teamId?: string | null }) {
     setEpostalar("");
   }
 
-  const basarili = sonuclar?.filter((s) => s.sifre) ?? [];
+  // Başarı ölçütü HATA YOKLUĞU, şifre varlığı değil.
+  const basarili = sonuclar?.filter((s) => !s.hata) ?? [];
+  const sifreliler = basarili.filter((s) => s.sifre);
 
   return (
     <section
@@ -195,13 +212,13 @@ export function AccountCreator({ teamId }: { teamId?: string | null }) {
                 ? ` · ${sonuclar.length - basarili.length} hata`
                 : ""}
             </p>
-            {basarili.length > 0 ? (
+            {sifreliler.length > 0 ? (
               <button
                 type="button"
                 data-testid="account-copy"
                 onClick={() =>
                   void navigator.clipboard?.writeText(
-                    basarili.map((s) => `${s.eposta}\t${s.sifre}`).join("\n"),
+                    sifreliler.map((s) => `${s.eposta}\t${s.sifre}`).join("\n"),
                   )
                 }
                 className="rounded-lg border border-border px-3 py-1 text-xs font-semibold text-muted hover:border-brand-300 hover:text-brand-700"
@@ -214,7 +231,7 @@ export function AccountCreator({ teamId }: { teamId?: string | null }) {
           {/* Şifreler YALNIZCA BURADA görünüyor - veri tabanında sadece
               bcrypt özeti var, bir daha okunamaz. Bu uyarı olmadan yönetici
               sayfayı kapatıp şifreleri kaybedebilir. */}
-          {basarili.length > 0 ? (
+          {sifreliler.length > 0 ? (
             <p
               data-testid="account-password-notice"
               className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
@@ -241,10 +258,20 @@ export function AccountCreator({ teamId }: { teamId?: string | null }) {
                 <span className="font-semibold text-foreground">{s.eposta}</span>
                 {s.hata ? (
                   <span className="text-rose-700">{s.hata}</span>
-                ) : (
+                ) : s.sifre ? (
                   <code className="rounded bg-slate-100 px-2 py-0.5 font-mono text-foreground">
                     {s.sifre}
                   </code>
+                ) : (
+                  // Şifre yok ama hata da yok: mevcut hesap bu kuruma
+                  // eklendi. Boş bırakmak "bir şey ters gitti" izlenimi
+                  // verirdi; ne olduğunu YAZIYORUZ.
+                  <span
+                    data-testid={`account-existing-${s.eposta}`}
+                    className="text-emerald-700"
+                  >
+                    Mevcut hesap bu kuruma eklendi · kendi şifresiyle girer
+                  </span>
                 )}
               </li>
             ))}

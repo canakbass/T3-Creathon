@@ -55,6 +55,12 @@ export interface Session {
   activeOrganizationId: string | null;
   /** Hangi kurumda hangi roller — seçim ekranı bunu gösteriyor. */
   memberships: Membership[];
+  /**
+   * E-posta doğrulandı mı. Rolsüz bir hesapta "hiçbir şey göremiyorum"un
+   * sebebi ya doğrulanmamış olması ya da henüz başvurusunun bulunmaması ve
+   * ikisi FARKLI şeyler söyler.
+   */
+  emailVerified: boolean;
   userId: string;
   email: string;
   fullName: string | null;
@@ -66,6 +72,7 @@ function toSession(wire: WireLoginResponse): Session {
     roles: wire.roles ?? [],
     activeRole: wire.active_role,
     activeOrganizationId: wire.active_organization_id ?? null,
+    emailVerified: wire.email_verified ?? true,
     memberships: (wire.memberships ?? []).map((m) => ({
       organizationId: m.organization_id,
       organizationName: m.organization_name,
@@ -128,6 +135,20 @@ export async function selectRole(
  * Her role açık: arayüz bunu her ekranda göstermeli. Yanlış kurumda işlem
  * yapmak başka bir kurumun verisine dokunmak demek.
  */
+/**
+ * Kullanıcı KENDİ kurumunu açar ve sorumlusu olur.
+ *
+ * Yeni kurum BOMBOŞ açılıyor ve sahibi başka hiçbir kurumun tek kaydını
+ * göremiyor. E-posta doğrulaması sunucuda şart: doğrulanmamış adresle kurum
+ * açılabilseydi sahte adreslerle sınırsız kiracı üretilebilirdi.
+ */
+export async function createOrganization(name: string): Promise<WireOrganization> {
+  return apiFetch<WireOrganization>("/api/organizations", {
+    method: "POST",
+    json: { name },
+  });
+}
+
 export async function getMyOrganization(): Promise<WireOrganization> {
   return apiFetch<WireOrganization>("/api/organizations/me");
 }
@@ -634,6 +655,16 @@ export async function createCompetition(input: {
 export interface TemplateInput {
   /** Bu sablonun ait oldugu rapor asamasi ("Kritik Tasarim Raporu" gibi). */
   reportTypeName?: string | null;
+  /**
+   * Yarışmanın AMACI ve rapordan BEKLENTİLER.
+   *
+   * Bu iki metin AI'nin SAYISAL puanını değiştirmiyor — kriter puanlaması
+   * bir kural motoru ve serbest metin bir kurala dönüşmüyor. İşleri
+   * insanlara bağlam vermek: hakem karar verirken, yarışmacı rapor
+   * hazırlarken.
+   */
+  purpose?: string | null;
+  reportExpectations?: string | null;
   acceptedLanguages: string[];
   requiredHeadings: string[];
   headingSynonyms?: Record<string, string[]>;
@@ -658,6 +689,8 @@ export async function setCompetitionTemplate(
     method: "PUT",
     json: {
       report_type_name: t.reportTypeName ?? null,
+      purpose: t.purpose ?? null,
+      report_expectations: t.reportExpectations ?? null,
       accepted_languages: t.acceptedLanguages,
       required_headings: t.requiredHeadings,
       heading_synonyms: t.headingSynonyms ?? {},

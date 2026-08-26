@@ -15,12 +15,20 @@ kurumun tek bir kaydini bile goremez. Her uc nokta kurumu TOKENDEN aliyor;
 yol ya da govdede kurum kimligi kabul eden bir uc nokta YOK - olsaydi
 "superuser" sifati kurum sinirini asmanin anahtari olurdu.
 
-BURADA OLMAYAN SEY: kurum ACMA. Bir uc noktadan kurum acilabilse, hesabi
-olan herkes yeni kiraci uretebilirdi; ustelik kendini o kurumun sorumlusu
-yapardi. Kurum acmak bir isletme karari - `scripts/kurum-ac.py` ile
-yapiliyor.
+KURUM ACMA ARTIK BURADA - VE BU BILINCLI BIR FIKIR DEGISIKLIGI.
+Onceden "bir uc noktadan kurum acilabilse hesabi olan herkes kendini
+sorumlu yaptigi kiraci uretirdi" diye reddedilmisti. O gerekce ARTIK
+GECERLI DEGIL: kurum yalitimi kapandi, yeni acilan kurum BOMBOS ve sahibi
+baska hicbir kurumun tek kaydini goremiyor. Tehlike "kurumu olmak" degildi,
+"baska kuruma ULASMAK"ti.
+
+Yerine gecen kosullar: e-posta DOGRULANMIS olmali (yoksa sahte adreslerle
+sinirsiz kiraci uretilir) ve kisi basina bir ust sinir var.
+`scripts/kurum-ac.py` duruyor - sunucu erisimi olanin ilk kurumu acmasi
+icin hala gerekli.
 """
 
+import re
 import uuid
 from typing import List, Optional
 
@@ -326,4 +334,112 @@ def revoke_role(
         "email": kullanici.email,
         "full_name": kullanici.full_name,
         "roles": kullanici.roles_in(kurum.id),
+    }
+
+
+# Bir kullanicinin acabilecegi en fazla kurum.
+#
+# Sinir olmadan bu uc bir kiraci fabrikasina donusur: her yeni kurum bos
+# olsa bile veri tabaninda satir, listede kayit ve destek yuku demek.
+# Ucte birakiyoruz - gercek bir kullanici (bir okul + bir sirket + bir
+# deneme) bunu asmaz; asan varsa zaten bizimle konusmasi gerekiyor.
+EN_FAZLA_KURUM = 3
+
+
+def _slug_uret(db: Session, ad: str) -> str:
+    """Kurum adindan kisa, benzersiz kimlik.
+
+    Turkce katlaniyor (`İSTANBUL Üniversitesi` -> `istanbul-universitesi`)
+    cunku slug URL'de ve gunlukte gorunuyor; diakritik birakmak ayni kuruma
+    iki farkli adresten bakilmasina yol acardi.
+    """
+    taban = re.sub(r"[^a-z0-9]+", "-", models.turkce_katla(ad)).strip("-")[:40]
+    if len(taban) < 3:
+        taban = "kurum"
+    aday = taban
+    ek = 2
+    while db.query(models.Organization).filter(models.Organization.slug == aday).first():
+        aday = f"{taban}-{ek}"
+        ek += 1
+    return aday
+
+
+@router.post("", response_model=schemas.OrganizationResponse, status_code=status.HTTP_201_CREATED)
+def create_organization(
+    govde: schemas.OrganizationCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
+    """Kullanici KENDI kurumunu acar ve sorumlusu olur.
+
+    NEDEN E-POSTA DOGRULAMASI SART: dogrulanmamis bir adresle kurum
+    acilabilseydi, sahte adreslerle sinirsiz kiraci uretilebilirdi. Ustelik
+    o kurumun sorumlusu, ulasilamayan bir posta kutusuna bagli olurdu -
+    sifresini unuttugunda kurtarmanin yolu kalmazdi.
+
+    YENI KURUM BOMBOS ACILIYOR: hicbir yarisma, hicbir rapor, hicbir uye.
+    Sahibi baska hicbir kurumun tek kaydini goremez - kurum kapisi zaten
+    tokenden gelen kuruma bakiyor ve bu kurum onun disinda hicbir sey
+    icermiyor.
+
+    BU UC KULLANICININ BASKA KURUMLARDAKI KONUMUNU DEGISTIRMIYOR: baska bir
+    kurumda yarismaci olan biri burada kendi kurumunun sorumlusu olur ama
+    orada yarismaci kalmaya devam eder.
+    """
+    if not current_user.email_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Kurum acmadan once e-posta adresinizi dogrulamaniz gerekiyor. "
+                "Giris ekranindan yeni bir dogrulama baglantisi isteyebilirsiniz."
+            ),
+        )
+
+    ad = (govde.name or "").strip()
+    if len(ad) < 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kurum adi en az 3 karakter olmali.",
+        )
+
+    sahip_oldugu = (
+        db.query(models.UserRole)
+        .filter(
+            models.UserRole.user_id == current_user.id,
+            models.UserRole.role == "ORG_OWNER",
+        )
+        .count()
+    )
+    if sahip_oldugu >= EN_FAZLA_KURUM:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"En fazla {EN_FAZLA_KURUM} kurum acabilirsiniz. Daha fazlasi "
+                "icin bizimle iletisime gecin."
+            ),
+        )
+
+    kurum = models.Organization(
+        id=f"org-{uuid.uuid4().hex[:10]}",
+        name=ad,
+        slug=_slug_uret(db, ad),
+    )
+    db.add(kurum)
+    db.flush()
+    db.add(
+        models.UserRole(
+            id=str(uuid.uuid4()),
+            user_id=current_user.id,
+            organization_id=kurum.id,
+            role="ORG_OWNER",
+        )
+    )
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "id": kurum.id,
+        "name": kurum.name,
+        "slug": kurum.slug,
+        "my_roles": current_user.roles_in(kurum.id),
+        "member_count": 1,
     }

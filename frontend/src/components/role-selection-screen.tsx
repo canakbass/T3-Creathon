@@ -11,6 +11,7 @@ import {
 import { describeError } from "@/lib/api/errors";
 import { ROLE_DEFINITIONS, getDashboardPath, isRole, type Role } from "@/lib/roles";
 import { AccountForm } from "@/components/auth/account-forms";
+import { NoMembershipScreen } from "@/components/auth/no-membership-screen";
 import { useAuthStore } from "@/store/auth-store";
 
 const ROLE_ICON_PATHS: Record<Role, string> = {
@@ -71,7 +72,15 @@ export function RoleSelectionScreen() {
     });
   }
 
-  /** Oturum tamamsa panele gider; seçim gerekiyorsa seçim adımına geçer. */
+  /**
+   * Oturum tamamsa panele gider; seçim gerekiyorsa seçim adımına geçer.
+   *
+   * ÜÇÜNCÜ BİR DURUM VAR ve atlanmıştı: hiçbir üyeliği olmayan hesap.
+   * Kullanıcının bildirdiği hata buydu — "kurumu ve rolü seçin" yazıyordu
+   * ama seçilecek HİÇBİR ŞEY yoktu. Kayıt hiçbir rol ve hiçbir kurum
+   * vermiyor (vermemeli de), o yüzden bu durum NORMAL; yapılması gereken
+   * kullanıcıya bir sonraki adımı göstermek.
+   */
   function oturumuIsle(session: Session) {
     if (session.activeRole && isRole(session.activeRole)) {
       const kurum =
@@ -116,6 +125,30 @@ export function RoleSelectionScreen() {
   }
 
   const secimGerekli = bekleyen !== null;
+  const uyeliksiz = bekleyen !== null && bekleyen.memberships.length === 0;
+
+  if (uyeliksiz && bekleyen) {
+    return (
+      <NoMembershipScreen
+        email={bekleyen.email}
+        emailVerified={bekleyen.emailVerified}
+        onKurumKuruldu={() => {
+          // Oturumu tazelemek için giriş ekranına dönüyoruz: kurum
+          // kurulduktan sonra token HÂLÂ rolsüz ve kurumsuz. Yeni yetkinin
+          // token'a girmesi için sunucunun yeniden imzalaması gerekiyor -
+          // arayüz kendi başına yetki ekleyemez.
+          setBekleyen(null);
+          setInfo(
+            "Kurumunuz oluşturuldu. Sorumlu olarak girmek için tekrar giriş yapın.",
+          );
+        }}
+        onCikis={() => {
+          setBekleyen(null);
+          setInfo(null);
+        }}
+      />
+    );
+  }
 
   if (!secimGerekli && adim !== "giris") {
     return (

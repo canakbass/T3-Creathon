@@ -130,6 +130,8 @@ def _yanit(y: models.Competition) -> dict:
         "submission_deadline": y.submission_deadline,
         "created_at": y.created_at,
         "report_type_name": y.report_type_name,
+        "purpose": y.purpose,
+        "report_expectations": y.report_expectations,
         "accepted_languages": _json_yukle(y.accepted_languages, ["tr"]),
         "required_headings": _json_yukle(y.required_headings, []),
         "heading_synonyms": _json_yukle(y.heading_synonyms, {}),
@@ -279,6 +281,28 @@ def _kural_degisimini_dogrula(db: Session, yarisma, onaylandi: bool) -> list:
     return analizli
 
 
+def _puanlama_kurallari_degisti_mi(y: models.Competition, govde) -> bool:
+    """Gelen istek, AI'nin OLCUTLERINDEN birini degistiriyor mu?
+
+    YALNIZCA bunlar sayiliyor: kabul edilen diller, zorunlu basliklar,
+    esanlamlilar, sayfa sinirlari, bolum uzunlugu. Bunlar AI'nin
+    dil/sablon/baslik kontrollerinin girdisi - degisirlerse eski raporlar
+    eski olcutle, yenileri yeni olcutle puanlanir.
+
+    SAYILMAYANLAR: rapor turu adi, amac, beklentiler. Bunlar insanlara
+    baglam veriyor, AI'nin sayisina girmiyor. Sayilsalardi bir yazim
+    hatasini duzeltmek butun analizleri yeniden calistirirdi.
+    """
+    return (
+        _json_yukle(y.accepted_languages, ["tr"]) != (govde.accepted_languages or ["tr"])
+        or _json_yukle(y.required_headings, []) != (govde.required_headings or [])
+        or _json_yukle(y.heading_synonyms, {}) != (govde.heading_synonyms or {})
+        or y.min_pages != govde.min_pages
+        or y.max_pages != govde.max_pages
+        or y.min_section_chars != govde.min_section_chars
+    )
+
+
 def _yeniden_analiz_kuyrukla(db: Session, background_tasks: BackgroundTasks, raporlar) -> None:
     """Verilen raporlarin analizini silip yeniden calistirilmak uzere kuyruklar."""
     # Ice aktarma FONKSIYON ICINDE: routes/reports.py bu modulu (competitions)
@@ -319,11 +343,25 @@ def set_template(
                 detail="En az sayfa sayisi, en fazladan buyuk olamaz.",
             )
 
-    # Sablon kurallari AI'nin dil/sablon/baslik kontrollerinin olcutu;
-    # analizden sonra degistirmek raporlari farkli olcutlerle puanlar.
-    yeniden = _kural_degisimini_dogrula(db, y, govde.confirm_reanalysis)
+    # PUANLAMAYI ETKILEYEN BIR SEY DEGISTI MI?
+    #
+    # Amac ve beklenti metinleri AI'nin sayisal puanini DEGISTIRMIYOR - kriter
+    # puanlamasi bir kural motoru ve serbest metin bir kurala donusmuyor.
+    # Ayirt etmeseydik, yonetici yalnizca amac metnini duzeltmek istedigine
+    # bile "bu yarismada N rapor analiz edildi, kurallari degistirirseniz..."
+    # (409) cevabini alirdi - yani sartnamenin kendisinden gelen bir gorevi
+    # (yarismayi TANIMLAMAK) yerine getiremezdi.
+    #
+    # Ayni ayrim ikinci bir sorunu da cozuyor: formu hic degistirmeden
+    # kaydetmek de 409 uretiyordu.
+    if _puanlama_kurallari_degisti_mi(y, govde):
+        yeniden = _kural_degisimini_dogrula(db, y, govde.confirm_reanalysis)
+    else:
+        yeniden = []
 
     y.report_type_name = govde.report_type_name
+    y.purpose = (govde.purpose or "").strip() or None
+    y.report_expectations = (govde.report_expectations or "").strip() or None
     y.accepted_languages = json.dumps(govde.accepted_languages, ensure_ascii=False)
     y.required_headings = json.dumps(govde.required_headings, ensure_ascii=False)
     y.heading_synonyms = json.dumps(govde.heading_synonyms or {}, ensure_ascii=False)

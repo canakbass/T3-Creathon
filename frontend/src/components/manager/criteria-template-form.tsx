@@ -149,12 +149,59 @@ export function CriteriaTemplateForm({ onSaved, submitError }: CriteriaTemplateF
           )}
         </div>
 
+        {/* YARIŞMANIN AMACI ve RAPORDAN BEKLENTİLER.
+            Şartname yöneticinin görevini "şablonu, KATEGORİ BİLGİLERİNİ ve
+            kriterleri TANIMLAR" diye yazıyor; formda yalnızca başlıklar,
+            ağırlıklar ve ad vardı. Hakem puanlarken ve yarışmacı raporunu
+            hazırlarken en çok ihtiyaç duydukları şey bu iki metin. */}
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="purpose" className="text-sm font-semibold text-foreground">
+            Yarışmanın amacı{" "}
+            <span className="font-normal text-muted">(isteğe bağlı)</span>
+          </label>
+          <textarea
+            id="purpose"
+            rows={3}
+            placeholder="örn. Lise öğrencilerini havacılıkta yapay zekâ uygulamalarına yönlendirmek."
+            data-testid="template-purpose"
+            {...register("purpose")}
+            className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+          />
+          <p className="text-xs text-muted">
+            Yarışmacı ve hakem bu metni görür. Bu yarışmanın neden açıldığını,
+            kimi hedeflediğini yazın.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="reportExpectations"
+            className="text-sm font-semibold text-foreground"
+          >
+            Rapordan beklentiler{" "}
+            <span className="font-normal text-muted">(isteğe bağlı)</span>
+          </label>
+          <textarea
+            id="reportExpectations"
+            rows={4}
+            placeholder="örn. Raporda özgün bir problem tanımı, uygulanan yöntem ve ölçülebilir bir sonuç bekliyoruz."
+            data-testid="template-expectations"
+            {...register("reportExpectations")}
+            className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-foreground outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+          />
+          <p className="text-xs text-muted">
+            Hakem karar verirken bu metni görür. Bu iki alan AI&apos;nin sayısal
+            puanını değiştirmez — kriter puanlaması bir kural motoru ve serbest
+            metin bir kurala dönüşmez. İşleri insanlara bağlam vermek.
+          </p>
+        </div>
+
         <fieldset className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <legend className="text-sm font-semibold text-foreground">Değerlendirme metrikleri</legend>
             <button
               type="button"
-              onClick={() => metricsArray.append({ name: "", weight: 0 })}
+              onClick={() => metricsArray.append({ name: "", weight: 0, description: "" })}
               className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-brand-700 transition hover:border-brand-300 hover:bg-brand-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
             >
               + Metrik ekle
@@ -166,7 +213,8 @@ export function CriteriaTemplateForm({ onSaved, submitError }: CriteriaTemplateF
               const nameError = errors.metrics?.[index]?.name?.message;
               const weightError = errors.metrics?.[index]?.weight?.message;
               return (
-                <div key={field.id} className="flex items-start gap-2">
+                <div key={field.id} className="flex flex-col gap-1.5">
+                  <div className="flex items-start gap-2">
                   <div className="flex flex-1 flex-col gap-1">
                     <label htmlFor={`metrics.${index}.name`} className="sr-only">
                       Metrik {index + 1} adı
@@ -232,6 +280,24 @@ export function CriteriaTemplateForm({ onSaved, submitError }: CriteriaTemplateF
                   >
                     Kaldır
                   </button>
+                  </div>
+
+                  {/* KRİTERİN AÇIKLAMASI: "bu kriterde tam olarak neye
+                      bakıyoruz". Hakem puanlarken bunu görüyor; olmadığında
+                      "Özgünlük %40" ifadesinin ne anlama geldiği her hakemin
+                      kendi yorumuna kalıyordu — aynı rapora iki hakem çok
+                      farklı puan verebilirdi. */}
+                  <label htmlFor={`metrics.${index}.description`} className="sr-only">
+                    Metrik {index + 1} açıklaması
+                  </label>
+                  <input
+                    id={`metrics.${index}.description`}
+                    type="text"
+                    placeholder="Bu kriterde neye bakılıyor? (isteğe bağlı — hakem bunu görür)"
+                    data-testid={`metric-description-${index}`}
+                    {...register(`metrics.${index}.description` as const)}
+                    className="rounded-lg border border-border bg-white px-3 py-1.5 text-xs text-foreground outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+                  />
                 </div>
               );
             })}

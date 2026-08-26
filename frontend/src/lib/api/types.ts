@@ -48,6 +48,8 @@ export interface WireLoginResponse {
    */
   active_organization_id: string | null;
   memberships: WireMembership[];
+  /** E-posta doğrulandı mı (eski sunucular göndermezse `true` varsayılır). */
+  email_verified?: boolean;
   user: WireUser;
 }
 
@@ -103,6 +105,9 @@ export interface WireCompetition {
   created_at: string;
   /** Sablonun ait oldugu rapor asamasi (bkz. backend Competition.report_type_name). */
   report_type_name: string | null;
+  /** Yarışmanın amacı ve rapordan beklentiler (serbest metin). */
+  purpose?: string | null;
+  report_expectations?: string | null;
   accepted_languages: string[];
   required_headings: string[];
   heading_synonyms: Record<string, string[]>;

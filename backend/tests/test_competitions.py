@@ -554,3 +554,148 @@ def test_kategori_etiketi_zorunlu_degil(kurulum, client):
     )
     assert r.status_code == 201, r.text[:200]
     assert r.json()["category_label"] is None
+
+
+# --- Yarismanin AMACI ve rapordan BEKLENTILER ---------------------------
+
+def test_amac_ve_beklentiler_kaydediliyor(client):
+    """Sartname yarisma yoneticisinin gorevini "guncel rapor sablonunu,
+    KATEGORI BILGILERINI ve degerlendirme kriterlerini TANIMLAR" diye
+    yaziyordu; sistemde yalnizca basliklar, agirliklar ve ad vardi.
+    "Bu yarisma ne icin var, rapordan ne bekleniyor" sorusunun cevabini
+    yazacak yer YOKTU."""
+    yonetici = _kaydol_ve_giris(client, "amac@test.org", ["COMPETITION_MANAGER"])
+    yar = client.post(
+        "/api/competitions",
+        json={"name": "Amaçlı Yarışma", "category_label": "Lise"},
+        headers=yonetici,
+    ).json()["id"]
+
+    r = client.put(
+        f"/api/competitions/{yar}/template",
+        json={
+            "required_headings": ["Özgünlük"],
+            "min_pages": 1,
+            "max_pages": 50,
+            "purpose": "Lise öğrencilerini havacılıkta yapay zekâya yönlendirmek.",
+            "report_expectations": "Raporda özgün bir problem tanımı ve ölçülebilir sonuç bekliyoruz.",
+        },
+        headers=yonetici,
+    )
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["purpose"].startswith("Lise öğrencilerini")
+    assert "ölçülebilir sonuç" in r.json()["report_expectations"]
+
+
+def test_SADECE_amac_degisimi_YENIDEN_ANALIZ_istemiyor(client):
+    """Ayirt etmeseydik yonetici yalnizca amac metnini duzeltmek istediginde
+    bile 409 alirdi - yani sartnamenin kendisinden gelen gorevi (yarismayi
+    TANIMLAMAK) yerine getiremezdi.
+
+    Amac ve beklentiler AI'nin SAYISAL puanini degistirmiyor; kriter
+    puanlamasi bir kural motoru ve serbest metin bir kurala donusmuyor.
+    """
+    import io
+
+    yonetici = _kaydol_ve_giris(client, "amac2@test.org", ["COMPETITION_MANAGER"])
+    kat = client.post(
+        "/api/categories", json={"name": "AI", "description": "x"}, headers=yonetici
+    ).json()["id"]
+    yar = client.post(
+        "/api/competitions",
+        json={"name": "Analizli", "category_label": "Lise", "category_id": kat},
+        headers=yonetici,
+    ).json()["id"]
+    sablon = {"required_headings": ["Özgünlük"], "min_pages": 1, "max_pages": 50}
+    client.put(f"/api/competitions/{yar}/template", json=sablon, headers=yonetici)
+    client.put(
+        f"/api/competitions/{yar}/criteria",
+        json={"criteria": [{"title": "Özgünlük", "weight": 100}]},
+        headers=yonetici,
+    )
+    client.put(f"/api/competitions/{yar}/status", json={"status": "open"}, headers=yonetici)
+    yukleme = client.post(
+        "/api/reports/upload",
+        data={"competition_id": yar},
+        files={"file": ("ali@x.com.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
+        headers=yonetici,
+    )
+    assert yukleme.status_code == 201, yukleme.text[:200]
+
+    # Yalnizca amac degisiyor -> gecmeli
+    sadece_amac = client.put(
+        f"/api/competitions/{yar}/template",
+        json={**sablon, "purpose": "Yeni amaç metni."},
+        headers=yonetici,
+    )
+    assert sadece_amac.status_code == 200, sadece_amac.text[:200]
+    assert sadece_amac.json()["purpose"] == "Yeni amaç metni."
+
+    # Zorunlu baslik degisirse ONAY isteniyor - o AI'nin olcutu.
+    baslik_degisti = client.put(
+        f"/api/competitions/{yar}/template",
+        json={**sablon, "required_headings": ["Bambaşka Başlık"]},
+        headers=yonetici,
+    )
+    assert baslik_degisti.status_code == 409, baslik_degisti.status_code
+
+
+def test_ayni_sablonu_TEKRAR_kaydetmek_409_vermiyor(client):
+    """Formu hic degistirmeden kaydetmek de 409 uretiyordu - yonetici
+    "kaydet"e iki kez basinca sistemin bozuldugunu sanirdi."""
+    import io
+
+    yonetici = _kaydol_ve_giris(client, "amac3@test.org", ["COMPETITION_MANAGER"])
+    kat = client.post(
+        "/api/categories", json={"name": "AI2", "description": "x"}, headers=yonetici
+    ).json()["id"]
+    yar = client.post(
+        "/api/competitions",
+        json={"name": "Tekrar", "category_label": "Lise", "category_id": kat},
+        headers=yonetici,
+    ).json()["id"]
+    sablon = {"required_headings": ["A"], "min_pages": 1, "max_pages": 9}
+    client.put(f"/api/competitions/{yar}/template", json=sablon, headers=yonetici)
+    client.put(
+        f"/api/competitions/{yar}/criteria",
+        json={"criteria": [{"title": "A", "weight": 100}]},
+        headers=yonetici,
+    )
+    client.put(f"/api/competitions/{yar}/status", json={"status": "open"}, headers=yonetici)
+    client.post(
+        "/api/reports/upload",
+        data={"competition_id": yar},
+        files={"file": ("b@x.com.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
+        headers=yonetici,
+    )
+
+    tekrar = client.put(
+        f"/api/competitions/{yar}/template", json=sablon, headers=yonetici
+    )
+    assert tekrar.status_code == 200, tekrar.text[:200]
+
+
+def test_kriter_ACIKLAMASI_kaydediliyor(client):
+    """"Ozgunluk %40" ifadesinin ne anlama geldigi her hakemin kendi
+    yorumuna kaliyordu."""
+    yonetici = _kaydol_ve_giris(client, "kriter.acik@test.org", ["COMPETITION_MANAGER"])
+    yar = client.post(
+        "/api/competitions",
+        json={"name": "Kriterli", "category_label": "Lise"},
+        headers=yonetici,
+    ).json()["id"]
+    r = client.put(
+        f"/api/competitions/{yar}/criteria",
+        json={
+            "criteria": [
+                {
+                    "title": "Özgünlük",
+                    "weight": 100,
+                    "description": "Fikrin literatürdeki benzerlerinden farkı açıkça anlatılmalı.",
+                }
+            ]
+        },
+        headers=yonetici,
+    )
+    assert r.status_code == 200, r.text[:200]
+    assert r.json()["criteria"][0]["description"].startswith("Fikrin literatürdeki")

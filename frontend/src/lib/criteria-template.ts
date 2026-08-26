@@ -36,6 +36,31 @@ export const criteriaTemplateSchema = z
       .trim()
       .min(3, "Rapor türü en az 3 karakter olmalı")
       .max(80, "Rapor türü en fazla 80 karakter olabilir"),
+    /**
+     * Yarışmanın AMACI ve rapordan BEKLENTİLER.
+     *
+     * NEDEN EKLENDİ: şartname yarışma yöneticisinin görevini "güncel rapor
+     * şablonunu, KATEGORİ BİLGİLERİNİ ve değerlendirme kriterlerini
+     * TANIMLAR" diye yazıyor. Formda yalnızca başlıklar, ağırlıklar ve ad
+     * vardı — "bu yarışma ne için var, rapordan ne bekleniyor" sorusunun
+     * cevabını yazacak yer yoktu. Hakem puanlarken ve yarışmacı raporunu
+     * hazırlarken en çok ihtiyaç duydukları şey buydu.
+     *
+     * İSTEĞE BAĞLI: zorunlu yapmak, hızlıca bir yarışma kurmak isteyen
+     * yöneticiyi kompozisyon yazmaya mecbur bırakırdı.
+     */
+    purpose: z
+      .string()
+      .trim()
+      .max(4000, "Amaç en fazla 4000 karakter olabilir")
+      .optional()
+      .or(z.literal("")),
+    reportExpectations: z
+      .string()
+      .trim()
+      .max(4000, "Beklentiler en fazla 4000 karakter olabilir")
+      .optional()
+      .or(z.literal("")),
     metrics: z
       .array(
         z.object({
@@ -44,6 +69,18 @@ export const criteriaTemplateSchema = z
             .number({ error: "Geçerli bir ağırlık girin" })
             .min(1, "Ağırlık en az 1 olmalı")
             .max(100, "Ağırlık 100'ü geçemez"),
+          /**
+           * Kriterin AÇIKLAMASI: "bu kriterde tam olarak neye bakıyoruz".
+           * Hakem puanlarken bunu görüyor; olmadığında "Özgünlük %40"
+           * ifadesinin ne anlama geldiği her hakemin kendi yorumuna
+           * kalıyordu.
+           */
+          description: z
+            .string()
+            .trim()
+            .max(1000, "Açıklama en fazla 1000 karakter olabilir")
+            .optional()
+            .or(z.literal("")),
         }),
       )
       .min(1, "En az bir değerlendirme metriği ekleyin"),
@@ -73,6 +110,8 @@ export type CriteriaTemplateFormValues = z.output<typeof criteriaTemplateSchema>
 
 export const DEFAULT_CRITERIA_TEMPLATE_VALUES = {
   reportTypeName: "",
-  metrics: [{ name: "", weight: 100 }],
+  purpose: "",
+  reportExpectations: "",
+  metrics: [{ name: "", weight: 100, description: "" }],
   requiredHeadings: [{ value: "" }],
 } as unknown as CriteriaTemplateFormInput;

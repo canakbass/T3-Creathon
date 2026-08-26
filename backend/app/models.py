@@ -333,6 +333,22 @@ class Competition(Base):
     # Arayuzde bu deger "Sablon adi" diye soruluyordu ve HICBIR YERE
     # kaydedilmiyordu; artik hangi asamanin kurallarina bakildigi kayitli.
     report_type_name = Column(String, nullable=True)
+    # YARISMANIN AMACI ve RAPORDAN BEKLENTILER - serbest metin.
+    #
+    # NEDEN EKLENDI: sartname yarisma yoneticisinin gorevini "guncel rapor
+    # sablonunu, KATEGORI BILGILERINI ve degerlendirme kriterlerini TANIMLAR"
+    # diye yaziyor. Sistemde yalnizca sablon basliklari, agirliklar ve ad
+    # vardi; "bu yarisma ne icin var, rapordan ne bekleniyor" sorusunun
+    # cevabini YAZACAK YER YOKTU. Hakem puanlarken ve yarismaci raporunu
+    # hazirlarken en cok ihtiyac duyduklari sey buydu.
+    #
+    # DURUSTCE: bu metin AI'nin SAYISAL puanini DEGISTIRMIYOR. Kriter
+    # puanlamasi bir kural motoru ve serbest metin bir kurala donusmuyor.
+    # Metnin isi INSANLARA baglam vermek - hakem karar verirken, yarismaci
+    # rapor yazarken. LLM motoru acikken (AI_SCORING_LLM) isteme de
+    # ekleniyor; kural motorunda yalnizca ekranlarda gorunuyor.
+    purpose = Column(Text, nullable=True)
+    report_expectations = Column(Text, nullable=True)
 
     # Yarismanin KATEGORI/SEVIYE etiketi - SERBEST METIN.
     #

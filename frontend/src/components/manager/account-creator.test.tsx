@@ -19,7 +19,7 @@ function jsonResponse(status: number, payload: unknown) {
   return { ok: status >= 200 && status < 300, status, json: async () => payload };
 }
 
-function mockCreate(basarisizlar: string[] = []) {
+function mockCreate(basarisizlar: string[] = [], mevcutlar: string[] = []) {
   let sayac = 0;
   const fetchMock = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -27,6 +27,20 @@ function mockCreate(basarisizlar: string[] = []) {
     const govde = JSON.parse(String(init?.body));
     if (basarisizlar.includes(govde.email)) {
       return jsonResponse(400, { detail: "Bu e-posta adresi zaten kayitli." });
+    }
+    // BAŞKA BİR KURUMDA zaten kayıtlı: sunucu 201 döner ama şifre YOK -
+    // yeni hesap açılmadı, bu kuruma ÜYELİK eklendi.
+    if (mevcutlar.includes(govde.email)) {
+      return jsonResponse(201, {
+        id: "mevcut-1",
+        email: govde.email,
+        full_name: null,
+        roles: govde.roles,
+        team_id: govde.team_id,
+        temporary_password: null,
+        notice:
+          "Bu e-posta baska bir kurumda zaten kayitliydi; bu kuruma UYELIK eklendi.",
+      });
     }
     sayac += 1;
     return jsonResponse(201, {
@@ -214,5 +228,43 @@ describe("AccountCreator", () => {
     const kutu = screen.getByTestId("account-emails");
     fireEvent.change(kutu, { target: { value: "x@y.org, X@Y.org, z@w.org" } });
     expect(screen.getByTestId("account-submit")).toHaveTextContent("2 hesap aç");
+  });
+
+  it("BAŞKA KURUMDA kayıtlı adres HATA sayılmıyor", async () => {
+    // Kullanıcının gördüğü hata: "0 hesap açıldı · 1 hata" yazıyordu ama
+    // işlem GERÇEKTE BAŞARILIYDI - adres başka bir kurumda kayıtlı olduğu
+    // için sunucu yeni hesap açmayıp bu kuruma üyelik eklemişti ve şifre
+    // döndürmemişti. Başarı ölçütü "şifre döndü mü" idi; artık "hata var
+    // mı".
+    mockCreate([], ["mevcut@baskakurum.org"]);
+    const user = userEvent.setup();
+    render(<AccountCreator />);
+
+    await user.type(screen.getByTestId("account-emails"), "mevcut@baskakurum.org");
+    await user.click(screen.getByTestId("account-submit"));
+
+    const sonuc = await screen.findByTestId("account-results");
+    expect(sonuc).toHaveTextContent("1 hesap açıldı");
+    expect(sonuc).not.toHaveTextContent("hata");
+    // Ne olduğu YAZILMALI: boş bırakmak "bir şey ters gitti" izlenimi verirdi.
+    expect(
+      screen.getByTestId("account-existing-mevcut@baskakurum.org"),
+    ).toHaveTextContent(/kendi şifresiyle girer/i);
+  });
+
+  it("şifresi olmayan satır KOPYALAMAYA girmiyor", async () => {
+    // "Hepsini kopyala" boş bir şifre yapıştırırsa yönetici o kişiye boş
+    // bir şifre iletir.
+    mockCreate([], ["mevcut@baskakurum.org"]);
+    const user = userEvent.setup();
+    render(<AccountCreator />);
+
+    await user.type(screen.getByTestId("account-emails"), "mevcut@baskakurum.org");
+    await user.click(screen.getByTestId("account-submit"));
+
+    await screen.findByTestId("account-results");
+    // Tek satır ve o da şifresiz → kopyalama düğmesi hiç görünmemeli.
+    expect(screen.queryByTestId("account-copy")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("account-password-notice")).not.toBeInTheDocument();
   });
 });

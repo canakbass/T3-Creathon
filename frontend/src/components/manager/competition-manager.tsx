@@ -147,6 +147,8 @@ export function CompetitionManager() {
         secili.id,
         {
           reportTypeName: values.reportTypeName,
+          purpose: values.purpose || null,
+          reportExpectations: values.reportExpectations || null,
           acceptedLanguages: ["tr"],
           requiredHeadings: values.requiredHeadings.map((h) => h.value),
           minPages: null,
@@ -157,7 +159,14 @@ export function CompetitionManager() {
       );
       await setCompetitionCriteria(
         secili.id,
-        values.metrics.map((m) => ({ title: m.name, weight: m.weight })),
+        // Kriter AÇIKLAMASI da gidiyor: hakem puanlarken bunu görüyor ve
+        // olmadığında "Özgünlük %40" ifadesinin ne anlama geldiği her
+        // hakemin kendi yorumuna kalıyordu.
+        values.metrics.map((m) => ({
+          title: m.name,
+          description: m.description || undefined,
+          weight: m.weight,
+        })),
         onay,
       );
       await yukle();
