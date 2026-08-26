@@ -28,15 +28,15 @@ kotudur - hakem hicbir raporu goremezse sistem kullanilamaz.
 """
 
 import io
+
+from tests.conftest import kullanici_ac
 import uuid
 
 import pytest
 
 
 def _kaydol_ve_giris(client, email, rol, sifre="password"):
-    client.post(
-        "/api/auth/register", json={"email": email, "password": sifre, "role": rol}
-    )
+    kullanici_ac(email, [rol], sifre)
     r = client.post("/api/auth/login", data={"username": email, "password": sifre})
     assert r.status_code == 200, r.text[:200]
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -210,15 +210,7 @@ def test_rol_secilmeden_rapora_erisilemez(senaryo, client):
     yetkisini kullanmamali.
     """
     email = "cok_rollu@test.org"
-    kayit = client.post(
-        "/api/auth/register",
-        json={
-            "email": email,
-            "password": "password",
-            "roles": ["REFEREE", "COMPETITOR", "COMPETITION_MANAGER"],
-        },
-    )
-    assert kayit.status_code == 201, kayit.text[:200]
+    kullanici_ac(email, ["REFEREE", "COMPETITOR", "COMPETITION_MANAGER"])
     giris = client.post(
         "/api/auth/login", data={"username": email, "password": "password"}
     ).json()

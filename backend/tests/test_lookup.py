@@ -12,15 +12,15 @@ Gevsetmeyi savunulabilir kilan uc sey ve bu dosyanin bekcilik ettigi sey:
 """
 
 import io
+
+from tests.conftest import kullanici_ac
 import uuid
 
 import pytest
 
 
 def _kaydol_ve_giris(client, email, roller, sifre="password"):
-    client.post(
-        "/api/auth/register", json={"email": email, "password": sifre, "roles": roller}
-    )
+    kullanici_ac(email, roller, sifre)
     giris = client.post(
         "/api/auth/login", data={"username": email, "password": sifre}
     ).json()

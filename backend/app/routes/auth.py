@@ -134,6 +134,27 @@ def register(user_in: schemas.UserCreate, db: Session = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Gecersiz rol: {', '.join(gecersiz)}. Gecerli roller: {', '.join(models.ROLLER)}.",
         )
+
+    # AYRICALIKLI ROL KENDI KENDINE ALINAMAZ.
+    #
+    # Bu kontrol create_user'da vardi, BURADA YOKTU - yani kayit acildiginda
+    # (SELF_REGISTRATION=1) herhangi biri govdeye `roles: ["ORG_OWNER"]`
+    # yazip varsayilan kurumun sorumlusu olabiliyordu: uye rehberini
+    # okuyabilir, kendine ve baskalarina rol dagitabilirdi. Yukaridaki
+    # gerekce yalnizca kendi kendine REFEREE almayi dusunmustu; ayni listede
+    # ORG_OWNER'in da durdugunu kimse fark etmemisti.
+    #
+    # `conftest.py` bu bayragi testler icin aciyor - yani hatanin gizli
+    # kalmasi degil, gorunur olmasi gereken bir yerdeydi.
+    ayricalikli = [r for r in istenen_roller if r in models.AYRICALIKLI_ROLLER]
+    if ayricalikli:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"{', '.join(ayricalikli)} rolu kendi kendine alinamaz; "
+                "bu rolleri yalnizca kurum sorumlusu verebilir."
+            ),
+        )
     if not istenen_roller:
         # Rol belirtilmemisse en dusuk yetkili rolu veriyoruz - bos rolle
         # kayitli bir kullanici hicbir sey yapamaz ve kafa karistirir.
@@ -236,7 +257,16 @@ def create_user(
         return {
             "id": mevcut.id,
             "email": mevcut.email,
-            "full_name": mevcut.full_name,
+            # GONDERILEN ad doner, KAYITLI ad DEGIL.
+            #
+            # Onceden `mevcut.full_name` donuyordu: cagirinin hic vermedigi,
+            # BASKA BIR KURUMUN kaydindan okunan bir bilgi. Yani herhangi bir
+            # kurumun yoneticisi rastgele bir e-posta deneyip o kisinin
+            # gercek adini ogrenebiliyordu (olculdu: "TAHMIN" gonderildi,
+            # "Demo Yarismaci" dondu). Kisi bu kuruma uye oldugu icin adini
+            # zaten uye listesinde gorecek - ama SORGUNUN CEVABI olarak
+            # dondurmek, listeyi bir arama motoruna cevirir.
+            "full_name": govde.full_name,
             "roles": mevcut.roles_in(kurum),
             "team_id": takim_id,
             "temporary_password": None,

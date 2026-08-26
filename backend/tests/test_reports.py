@@ -1,5 +1,7 @@
 import io
 import os
+
+from tests.conftest import kullanici_ac
 from pathlib import Path
 
 import pytest
@@ -16,9 +18,7 @@ GERCEK_RAPOR = (
 
 
 def _kaydol_ve_giris(client, email, rol):
-    client.post(
-        "/api/auth/register", json={"email": email, "password": "password", "role": rol}
-    )
+    kullanici_ac(email, [rol])
     r = client.post(
         "/api/auth/login", data={"username": email, "password": "password"}
     )
@@ -47,18 +47,9 @@ def _ata(client, yonetici_headers, report_id, hakem_email):
 
 def test_report_lifecycle(client, demo_takim):
     # 1. Register users (competitor & referee)
-    client.post(
-        "/api/auth/register",
-        json={"email": "comp@test.org", "password": "password", "role": "COMPETITOR"}
-    )
-    client.post(
-        "/api/auth/register",
-        json={"email": "ref@test.org", "password": "password", "role": "REFEREE"}
-    )
-    client.post(
-        "/api/auth/register",
-        json={"email": "manager@test.org", "password": "password", "role": "COMPETITION_MANAGER"}
-    )
+    kullanici_ac("comp@test.org", ["COMPETITOR"])
+    kullanici_ac("ref@test.org", ["REFEREE"])
+    kullanici_ac("manager@test.org", ["COMPETITION_MANAGER"])
 
     # Login competitor
     comp_login = client.post("/api/auth/login", data={"username": "comp@test.org", "password": "password"})

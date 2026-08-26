@@ -9,11 +9,12 @@ from pathlib import Path
 import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import FileResponse, Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from ..database import get_db
-from .. import models, schemas, auth
+from .. import models, schemas, auth, tenancy
 from ..services import ai
 from ..services import storage
 from . import competitions
@@ -213,10 +214,14 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
         # oran degisir ve hakeme gosterilen referans cumlesi yalan olur.
         # Ayrica hakem, gosteremedigi bir belgeye dayanan intihal suclamasi
         # yapamaz - islem yapilabilir bir bulgu degildir.
-        if report.organization_id:
-            karsilastirma_sorgusu = karsilastirma_sorgusu.filter(
-                models.Report.organization_id == report.organization_id
-            )
+        # KOSULSUZ: onceden `if report.organization_id:` vardi, yani kurumu
+        # BOS bir rapor her kurumun her raporuyla karsilastiriliyordu - ve
+        # bulgu metni karsilastirilan raporun kimligini tasidigi icin bu,
+        # kurumsuz tek bir kayitla butun sistemin basvuru kimliklerini
+        # okumak demekti. Kurumsuz rapor artik kurumsuz havuzda kaliyor.
+        karsilastirma_sorgusu = karsilastirma_sorgusu.filter(
+            models.Report.organization_id == report.organization_id
+        )
         # AYNI TAKIMIN kendi raporlari karsilastirmadan CIKARILIYOR.
         #
         # Sartname madde 5: "BASVURULAR ARASINDA yuksek benzerlik gosteren
@@ -397,13 +402,20 @@ async def upload_report(
     yarismadan alinir. Rapor hangi TAKIMA ait oldugu `team_id` ile
     belirtilir - sonucu kimin gorecegi buradan cikiyor.
     """
+    # UC YABANCI ANAHTAR DA KAPIDAN GECIYOR.
+    #
+    # ONCEDEN GECMIYORDU ve tek guvence "yonetici misin"di - "BURADA yonetici
+    # misin" degil. Olculdu: CBU yoneticisi `team_id=team-glieser` gonderip
+    # T3 kurumuna rapor ENJEKTE etti (HTTP 201), rapor T3'un listesinde
+    # gorundu ve yanit T3'un takim adini ("Glieser") geri verdi. Bunun uc
+    # ayri sonucu vardi: (a) yabanci kurumun degerlendirme kuyruguna belge
+    # sokmak - o kurumun kendi hakemlerine atanir, (b) yabanci kurumun
+    # INTIHAL HAVUZUNA girmek, yani bir belgenin kopyasini yukleyip o
+    # kurumun gercek basvurularini intihalci gostermek, (c) 201/404 farkiyla
+    # yabanci takim ve yarisma kimliklerini saymak.
     competition = None
     if competition_id:
-        competition = db.query(models.Competition).filter(
-            models.Competition.id == competition_id
-        ).first()
-        if not competition:
-            raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+        competition = tenancy.yarisma_getir_yetkiliyse(competition_id, current_user, db)
 
         # ASAMA KONTROLU YOK - bilincli.
         #
@@ -446,10 +458,16 @@ async def upload_report(
             ),
         )
     takim = db.query(models.Team).filter(models.Team.id == team_id).first()
-    if not takim:
+    # "Yok" ile "baska kurumun" AYNI cevabi veriyor: ayirt edilebilseydi
+    # yonetici rastgele kimlik deneyerek baska kurumlarin takim listesini
+    # cikarabilirdi (olculdu: var olmayan takim 404, A kurumunun takimi 201
+    # + takim adi).
+    if takim is None or not tenancy.ayni_kurum_mu(takim, current_user):
         raise HTTPException(status_code=404, detail="Takim bulunamadi.")
 
     category = db.query(models.Category).filter(models.Category.id == category_id).first()
+    if category is not None and not tenancy.ayni_kurum_mu(category, current_user):
+        category = None
     if not category:
         raise HTTPException(status_code=404, detail="Kategori bulunamadi.")
 
@@ -513,10 +531,15 @@ async def upload_report(
         competition_id=competition.id if competition else None,
         submitted_by_id=current_user.id,
         team_id=takim.id if takim else None,
-        # Kurum TAKIMDAN geliyor: takim zorunlu oldugu icin her raporun bir
-        # kurumu oluyor. Yarismadan turetmek yanlis olurdu - competition_id
-        # nullable ve o yol kurumsuz rapor uretebilir.
-        organization_id=takim.organization_id if takim else None,
+        # Kurum YUKLEYENIN TOKENINDEN geliyor, govdeden secilen takimdan
+        # DEGIL. Takimdan turetildiginde, govdeye yabanci bir takim kimligi
+        # yazmak raporu O KURUMDA dogurmaya yetiyordu. Kapi artik takimi da
+        # dogruluyor - ama kaydin kurumunu yine de saldirganin sectigi bir
+        # nesneden almak, kapinin ilerideki her degisikliginde bu delige
+        # geri donme riski demek.
+        organization_id=tenancy.aktif_kurum(current_user) or (
+            takim.organization_id if takim else None
+        ),
         submission_date=datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     )
     
@@ -585,17 +608,13 @@ def _rapora_erisebilir_mi(report: models.Report, user: models.User) -> bool:
 def _ayni_kurum_mu(report: models.Report, user: models.User) -> bool:
     """Rapor, istegin yapildigi kuruma mi ait.
 
-    Gecis donemi toleransi: kurumu OLMAYAN raporlar (yarisma akisi devreye
-    girmeden once yuklenmis eski kayitlar) ve kurumu OLMAYAN tokenlar
-    engellenmiyor. Bu tolerans GECICI; kurum kapsami tum uc noktalara
-    yayilip eski kayitlar tasindiginda kaldirilacak ve kurumsuz olan her sey
-    reddedilecek.
+    TEK TANIMA DEVREDIYOR (tenancy.ayni_kurum_mu). Onceden burada AYRI bir
+    kopya vardi ve ikisi ayrismisti: bu kopya `KATI_KURUM` bayragini hic
+    sormuyordu, yani bayrak acildiginda en hassas modul kapanmiyor ama
+    kapandigi saniliyordu. Iki yerde yazilan bir kural, zamanla iki farkli
+    kural demek.
     """
-    rapor_kurum = report.organization_id
-    aktif_kurum = getattr(user, "active_org_id", None)
-    if rapor_kurum is None or aktif_kurum is None:
-        return True
-    return rapor_kurum == aktif_kurum
+    return tenancy.ayni_kurum_mu(report, user)
 
 
 def _yarismacinin_raporu_mu(report: models.Report, user: models.User) -> bool:
@@ -631,12 +650,12 @@ def _erisim_filtresi(query, user: models.User, db: Session):
     # Yonetici dali `return query` ile filtresiz donuyor; kurum kosulu o
     # dalin icine yazilirsa tek satirlik bir unutma sistemi tek kurumluga
     # geri dondurur ve hicbir mevcut test bunu yakalamaz.
-    aktif_kurum = getattr(user, "active_org_id", None)
-    if aktif_kurum is not None:
-        query = query.filter(
-            (models.Report.organization_id == aktif_kurum)
-            | (models.Report.organization_id.is_(None))  # gecis donemi
-        )
+    # Tek tanima devrediyor: kurumu OLMAYAN bir token artik hicbir sey
+    # gormuyor. Onceden `if aktif_kurum is not None` filtreyi TAMAMEN
+    # atliyordu - yani kurum secmemek, kurum secmekten DAHA COK yetki
+    # veriyordu. Olculdu: org iddiasi olmayan imzali bir token 12 raporun
+    # hepsini, baska kurumun yarismasini ve kategorilerini goruyordu.
+    query = tenancy.kurum_filtresi(query, models.Report, user)
 
     if aktif in models.YONETICI_ROLLERI:
         return query
@@ -826,9 +845,15 @@ def lookup_reports(
         anahtar = "team_id"
     else:
         # E-posta buyuk/kucuk harf duyarsiz ama TAM eslesme.
+        #
+        # `ilike` KULLANMIYORUZ: LIKE'in `%` ve `_` jokerlerini yorumluyor ve
+        # `?email=%` tek bir istekle rastgele bir kullaniciyi getiriyordu -
+        # oysa bu ucun savunmasi "arama TAM ESLESME, joker yok" iddiasina
+        # dayaniyor. Kurum filtresi yine de tutuyordu, ama iki savunmadan
+        # birinin calismadigini bilmeden digerine guvenmis oluyorduk.
         kullanici = (
             db.query(models.User)
-            .filter(models.User.email.ilike(email.strip()))
+            .filter(func.lower(models.User.email) == email.strip().lower())
             .first()
         )
         if not kullanici:

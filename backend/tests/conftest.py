@@ -1,4 +1,5 @@
 import os
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -43,6 +44,45 @@ engine = create_engine(
     poolclass=StaticPool,
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def kullanici_ac(email, roller, sifre="password", org="org-t3"):
+    """Kullaniciyi VERI TABANINA dogrudan yazar; API'ye dokunmaz.
+
+    NEDEN API DEGIL: testler uzun sure /api/auth/register kullaniyordu ve o
+    uc nokta govdeden gelen HERHANGI bir rolu kabul ediyordu - yani testler
+    kurulum icin bir URUN ACIGINA dayaniyordu. Acik kapatilinca (ayricalikli
+    roller kendi kendine alinamaz) 38 test birden dustu. Bu, kurulumun
+    uretim yolundan gecmesinin neden kotu bir fikir oldugunun kaniti: bir
+    guvenlik duzeltmesi, hicbir iliskisi olmayan testleri kirmis gibi
+    gorunuyor ve duzeltmeyi geri almak cazip hale geliyor.
+
+    Kurulum artik urunun izin verdigi seyden BAGIMSIZ. Gercek kayit yolunun
+    kendi testleri ayrica duruyor (test_auth.py).
+    """
+    from app import auth as A
+    from app import models
+
+    db = TestingSessionLocal()
+    try:
+        kullanici = models.User(
+            id=str(uuid.uuid4()), email=email, password_hash=A.hash_password(sifre)
+        )
+        db.add(kullanici)
+        db.flush()
+        for rol in roller:
+            db.add(
+                models.UserRole(
+                    id=str(uuid.uuid4()),
+                    user_id=kullanici.id,
+                    organization_id=org,
+                    role=rol,
+                )
+            )
+        db.commit()
+        return kullanici.id
+    finally:
+        db.close()
 
 
 @pytest.fixture(scope="function")

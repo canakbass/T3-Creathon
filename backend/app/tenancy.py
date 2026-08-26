@@ -11,12 +11,18 @@ UC KURAL, HEPSI BU DOSYADA:
    kurumun kaydinda "bu kisinin rolu ne" sorusu HIC sorulmaz - cunku
    sorulursa "yonetici her seyi gorur" gibi bir dal kurum sinirini asar.
 
-2. YOKLUKTA ACIK DEGIL, YOKLUKTA GECIS. Kaydin ya da kullanicinin kurumu
-   bos ise erisim veriliyor (`_gecis_toleransi`). Bu bilincli bir GECIS
-   donemi tavizi: kurum alanlari mevcut veriye sonradan eklendi ve eski
-   kayitlarin kurumu bos. Tolerans olmasaydi eski veri bir anda herkese
-   kapanirdi. Kurum alanlari zorunlu hale gelince bu tolerans KALKMALI -
-   `KATI_KURUM` bayragi bunun icin var.
+2. TOLERANS YALNIZCA KAYIT TARAFINDA. Kurumu bos KAYITLARA erisim
+   veriliyor (`_gecis_toleransi`) cunku kurum alanlari mevcut veriye
+   sonradan eklendi ve eski kayitlarin kurumu bos; tolerans olmasaydi eski
+   veri bir anda herkese kapanirdi. Kurum alanlari zorunlu hale gelince bu
+   da kalkmali - `KATI_KURUM` bayragi bunun icin var.
+
+   KULLANICI tarafinda tolerans YOK. Bir zamanlar vardi ve kapiyi tam ters
+   cevirmisti: kurum SECMEMEK, kurum secmekten DAHA COK yetki veriyordu.
+   Olculdu - org iddiasi tasimayan imzali bir token 12 raporun hepsini,
+   baska kurumun yarismasini ve ozel kategorilerini goruyordu. Kurumsuz
+   token "henuz secim yapilmadi" ya da "gecmisten kalmis" demek; ikisi de
+   veri gormemeli.
 
 3. YABANCI KURUMDA 404, KENDI KURUMUNDA 403. Kurum ICINDE 403 dogru
    tercihtir: net mesaj hakemin isini kolaylastirir ve kaydin var oldugu
@@ -52,9 +58,24 @@ def aktif_kurum(user) -> str | None:
 
 
 def _gecis_toleransi(kayit_kurum, kullanici_kurum) -> bool:
+    """Yalnizca KAYIT kurumsuzsa tolerans var; KULLANICI kurumsuzsa YOK.
+
+    Onceden ikisi de tolere ediliyordu ve bu, kapiyi tam ters cevirmisti:
+    kurum SECMEMEK, kurum secmekten DAHA COK yetki veriyordu. Olculdu - org
+    iddiasi tasimayan imzali bir token 12 raporun hepsini, baska kurumun
+    yarismasini ve ozel kategorilerini goruyordu.
+
+    Kayit tarafindaki tolerans duruyor cunku sebebi baska: kurum alanlari
+    mevcut veriye SONRADAN eklendi ve eski kayitlarin kurumu bos. Kullanici
+    tarafinda boyle bir eski veri yok - kurumsuz token yalnizca "henuz
+    secim yapilmadi" ya da "gecmisten kalmis" demek; ikisi de veri
+    gormemeli.
+    """
     if KATI_KURUM:
         return False
-    return kayit_kurum is None or kullanici_kurum is None
+    if kullanici_kurum is None:
+        return False
+    return kayit_kurum is None
 
 
 def ayni_kurum_mu(kayit, user) -> bool:
@@ -89,8 +110,19 @@ def kurum_filtresi(query, model, user):
     goruyorum ama listede yok" gibi tutarsizliklar cikar.
     """
     kullanici_kurum = aktif_kurum(user)
-    if kullanici_kurum is None and not KATI_KURUM:
-        return query
+    if kullanici_kurum is None:
+        # KURUMSUZ TOKEN HICBIR SEY GORMUYOR. Onceden burada `return query`
+        # vardi - yani filtre tamamen atlaniyordu. Bos sonuc yerine
+        # `1 = 0` kullanmiyoruz, ACIKCA reddediyoruz: sessizce bos donmek,
+        # rol secmemis kullaniciya "sistemde hicbir sey yok" izlenimi verir
+        # ve gercek sebep (secim yapilmadi) hicbir yerde gorunmez.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Bu istek icin kurum secilmemis. /api/auth/select-role ile "
+                "hangi kurum adina calistiginizi secin."
+            ),
+        )
     if KATI_KURUM:
         return query.filter(model.organization_id == kullanici_kurum)
     return query.filter(
@@ -145,12 +177,19 @@ def kurumun_rolleri(db: Session, kurum_id: str | None, rol: str) -> list:
     yolu, cunku atama yaparken kimse hakemin hangi kurumda oldugunu
     sormuyordu.
     """
-    # Kurumsuz istek KATI modda HICBIR SEY gormuyor; kontrol sorgudan ONCE
-    # geliyor ki "once kapsamsiz sorguyu kur, sonra vazgec" gibi bir sira
-    # kalmasin.
-    if kurum_id is None and KATI_KURUM:
+    # Kurumsuz istek HICBIR SEY gormuyor - KATI modda da, gevsek modda da.
+    # Gevsek modda sistem genelindeki hakem rehberini dondurmek "kurum
+    # secmemek daha cok yetki verir" hatasinin ta kendisiydi. Kontrol
+    # sorgudan ONCE geliyor ki "once kapsamsiz sorguyu kur, sonra vazgec"
+    # gibi bir sira kalmasin.
+    if kurum_id is None:
         return []
-    q = db.query(models.UserRole).filter(models.UserRole.role == rol)
-    if kurum_id is not None:
-        q = q.filter(models.UserRole.organization_id == kurum_id)
-    return [r.user_id for r in q.all()]
+    return [
+        r.user_id
+        for r in db.query(models.UserRole)
+        .filter(
+            models.UserRole.role == rol,
+            models.UserRole.organization_id == kurum_id,
+        )
+        .all()
+    ]

@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import kullanici_ac
+
 # Gercek bir TEKNOFEST finalist raporu. Sahte "%PDF-1.4 Mock" baytlariyla
 # benzerlik modulu daha en basta "PDF okunamadi" dalina giriyor ve
 # karsilastirma HIC yapilmiyor - o durumda kimlik sizintisi testi yanlis
@@ -33,10 +35,7 @@ GERCEK_RAPOR = (
 
 
 def _kaydol_ve_giris(client, email, roller, sifre="password"):
-    r = client.post(
-        "/api/auth/register", json={"email": email, "password": sifre, "roles": roller}
-    )
-    assert r.status_code == 201, r.text[:200]
+    kullanici_ac(email, roller, sifre)
     return client.post(
         "/api/auth/login", data={"username": email, "password": sifre}
     ).json()

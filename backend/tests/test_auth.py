@@ -36,7 +36,7 @@ def test_login_user(client):
     # Register user first
     client.post(
         "/api/auth/register",
-        json={"email": "login@teknofest.org", "password": "mypassword", "role": "COMPETITION_MANAGER"}
+        json={"email": "login@teknofest.org", "password": "mypassword", "role": "REFEREE"}
     )
     
     # Login (form-urlencoded)
@@ -65,7 +65,7 @@ def test_get_me(client):
     pwd = "password1"
     client.post(
         "/api/auth/register",
-        json={"email": email, "password": pwd, "role": "EVALUATION_MANAGER"}
+        json={"email": email, "password": pwd, "role": "REFEREE"}
     )
     login_res = client.post(
         "/api/auth/login",
@@ -80,7 +80,7 @@ def test_get_me(client):
     )
     assert response.status_code == 200
     assert response.json()["email"] == email
-    assert response.json()["role"] == "EVALUATION_MANAGER"
+    assert response.json()["role"] == "REFEREE"
 
 
 def test_get_me_unauthorized(client):

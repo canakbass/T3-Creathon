@@ -15,13 +15,11 @@ import uuid
 
 import pytest
 
+from tests.conftest import kullanici_ac
+
 
 def _kaydol_ve_giris(client, email, roller, sifre="password"):
-    r = client.post(
-        "/api/auth/register",
-        json={"email": email, "password": sifre, "roles": roller},
-    )
-    assert r.status_code == 201, r.text[:200]
+    kullanici_ac(email, roller, sifre)
     giris = client.post(
         "/api/auth/login", data={"username": email, "password": sifre}
     ).json()

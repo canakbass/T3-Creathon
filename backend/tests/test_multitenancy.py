@@ -818,3 +818,218 @@ def test_rol_kapisi_kurum_kapisindan_ONCE_ama_KAHIN_DEGIL(client, iki_kurum):
     govdeler = {r.json().get("detail") for r in yanitlar.values()}
     assert set(durumlar.values()) == {403}, durumlar
     assert len(govdeler) == 1, f"rol reddi raporun varligini sizdiriyor: {govdeler}"
+
+
+# --- Yazma yolu: en agir acik buradaydi ---------------------------------
+
+def test_yabanci_kurumun_TAKIMINA_rapor_ENJEKTE_edilemiyor(client, db_session, iki_kurum):
+    """Olculdu: CBU yoneticisi `team_id=team-glieser` gonderip T3 kurumuna
+    rapor ENJEKTE etti (HTTP 201), rapor T3'un listesinde gorundu ve yanit
+    T3'un takim adini geri verdi.
+
+    Okuma yolu bastan sona kapatilmisti; YAZMA yolu atlanmisti. Tek guvence
+    "yonetici misin"di - "BURADA yonetici misin" degil. Uc ayri sonucu vardi:
+      (a) yabanci kurumun degerlendirme kuyruguna belge sokmak - o kurumun
+          kendi hakemlerine atanir,
+      (b) yabanci kurumun INTIHAL HAVUZUNA girmek: bir belgenin kopyasini
+          yukleyip o kurumun gercek basvurularini intihalci gostermek,
+      (c) 201/404 farkiyla yabanci takim kimliklerini saymak.
+    """
+    from app import models
+
+    r = client.post(
+        "/api/reports/upload",
+        data={
+            "project_name": "ENJEKTE",
+            "competition_id": iki_kurum["yar_id"],
+            "team_id": "takim-a",
+        },
+        files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 404, f"yabanci kuruma rapor enjekte edildi (HTTP {r.status_code})"
+    assert (
+        db_session.query(models.Report)
+        .filter(models.Report.project_name == "ENJEKTE")
+        .count()
+        == 0
+    ), "istek reddedildi ama kayit yine de olustu"
+
+
+def test_yabanci_TAKIM_ile_var_olmayan_takim_AYIRT_EDILEMIYOR(client, iki_kurum):
+    """Ayirt edilebilseydi yonetici rastgele kimlik deneyerek baska
+    kurumlarin takim listesini cikarabilirdi (olculdu: var olmayan takim
+    404, A kurumunun takimi 201 + takim ADI)."""
+    yanitlar = []
+    for tid in ("takim-yok-boyle", "takim-a"):
+        yanitlar.append(
+            client.post(
+                "/api/reports/upload",
+                data={
+                    "project_name": "SONDA",
+                    "competition_id": iki_kurum["yar_id"],
+                    "team_id": tid,
+                },
+                files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
+                headers=iki_kurum["b_yonetici"],
+            )
+        )
+    assert {r.status_code for r in yanitlar} == {404}, [r.status_code for r in yanitlar]
+    assert len({r.json().get("detail") for r in yanitlar}) == 1, [
+        r.json().get("detail") for r in yanitlar
+    ]
+
+
+def test_yabanci_YARISMAYA_rapor_eklenemiyor(client, iki_kurum):
+    """Kendi takimiyla ama BASKA kurumun yarismasina yuklemek de kapali.
+
+    Bu, okuma sizintisindan once bir BOZMA araci: yabanci yarismanin rapor
+    sayisini artirmak, o yarismanin kriterlerini kilitliyor
+    (_kural_degisimini_dogrula "zaten analiz edilmis rapor var" diyip 409
+    donuyor). Kurum kendi kriterini degistiremez hale geliyordu.
+    """
+    r = client.post(
+        "/api/reports/upload",
+        data={
+            "project_name": "KILITLE",
+            "competition_id": iki_kurum["yar_id"],
+            "team_id": "takim-b",
+        },
+        files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 404, f"HTTP {r.status_code}"
+
+
+# --- Kurumsuz token: secim yapmamak DAHA COK yetki veriyordu -------------
+
+def test_KURUMSUZ_token_hicbir_sey_goremiyor(client, iki_kurum):
+    """Olculdu: org iddiasi tasimayan imzali bir token butun raporlari,
+    baska kurumun yarismasini ve ozel kategorilerini goruyordu.
+
+    Sebep: her kurum filtresi "kullanicinin kurumu yoksa filtreleme" diye
+    kisa devre yapiyordu. Yani KURUM SECMEMEK, kurum secmekten DAHA COK
+    yetki veriyordu - `_rol_yoksa_reddet`in rol icin kapattigi hatanin
+    kurum karsiligi.
+    """
+    from app import auth as A
+
+    sahte = A.create_access_token(
+        data={"sub": "b.yonetici@cbu.edu.tr", "role": "COMPETITION_MANAGER", "org": None}
+    )
+    kurumsuz = {"Authorization": f"Bearer {sahte}"}
+    for yol in ("/api/reports", "/api/competitions", "/api/categories", "/api/dashboard/stats"):
+        r = client.get(yol, headers=kurumsuz)
+        assert r.status_code == 403, f"{yol} -> HTTP {r.status_code} {r.text[:120]}"
+    assert (
+        client.get(f"/api/reports/{iki_kurum['rapor_id']}", headers=kurumsuz).status_code
+        == 403
+    )
+
+
+def test_rol_SECMEMIS_token_da_veri_goremiyor(client, db_session, iki_kurum):
+    """Rol secilmemis token gecerli kalmali (secim ekrani gosterilirken elde
+    duruyor) ama HICBIR veri ucundan gecmemeli."""
+    from app import models
+
+    kisi = _kullanici_kur(db_session, "cok.rollu@cbu.edu.tr", "org-cbu", "REFEREE")
+    db_session.add(
+        models.UserRole(
+            id=str(uuid.uuid4()),
+            user_id=kisi.id,
+            organization_id="org-cbu",
+            role="COMPETITOR",
+        )
+    )
+    db_session.commit()
+
+    _, giris = _giris(client, "cok.rollu@cbu.edu.tr")
+    assert giris["active_role"] is None
+    tok = {"Authorization": f"Bearer {giris['access_token']}"}
+    # /me ve /select-role calismali
+    assert client.get("/api/auth/me", headers=tok).status_code == 200
+    # Veri uclari kapali
+    for yol in ("/api/reports", "/api/competitions", "/api/categories"):
+        assert client.get(yol, headers=tok).status_code == 403, yol
+
+
+# --- Kendi kendine kayit ayricalikli rol veremez -------------------------
+
+@pytest.mark.parametrize("rol", ["ORG_OWNER", "COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+def test_kendi_kaydinda_AYRICALIKLI_rol_alinamiyor(client, rol):
+    """Bu kontrol create_user'da vardi, /register'da YOKTU.
+
+    Kayit acildiginda (SELF_REGISTRATION=1 - conftest testler icin aciyor)
+    herhangi biri govdeye `roles: ["ORG_OWNER"]` yazip varsayilan kurumun
+    sorumlusu olabiliyordu: uye rehberini okur, kendine ve baskalarina rol
+    dagitirdi. Kayit ucunun gerekcesi yalnizca kendi kendine REFEREE almayi
+    dusunmustu; ayni listede ORG_OWNER'in da durdugu gozden kacmisti.
+    """
+    r = client.post(
+        "/api/auth/register",
+        json={"email": f"tirmanan.{rol.lower()}@test.org", "password": "parola123", "roles": [rol]},
+    )
+    assert r.status_code == 403, f"{rol} kendi kendine alindi (HTTP {r.status_code})"
+
+
+def test_kendi_kaydinda_SIRADAN_rol_hala_alinabiliyor(client):
+    """Kilit fazla siki olmamali: kayit acikken yarismaci/hakem kaydi
+    calismaya devam etmeli."""
+    r = client.post(
+        "/api/auth/register",
+        json={"email": "siradan@test.org", "password": "parola123", "roles": ["COMPETITOR"]},
+    )
+    assert r.status_code == 201, r.text[:200]
+
+
+# --- Mevcut hesabin GERCEK ADI sizmiyor ---------------------------------
+
+def test_mevcut_hesabin_GERCEK_ADI_sizmiyor(client, db_session, iki_kurum):
+    """Onceden yanit `mevcut.full_name` donuyordu: cagirinin hic vermedigi,
+    BASKA BIR KURUMUN kaydindan okunan bir bilgi. Yani herhangi bir kurumun
+    yoneticisi rastgele bir e-posta deneyip o kisinin gercek adini
+    ogrenebiliyordu (olculdu: "TAHMIN" gonderildi, "Demo Yarismaci" dondu).
+    """
+    from app import models
+
+    kisi = (
+        db_session.query(models.User)
+        .filter(models.User.email == "a.yarismaci@t3.org")
+        .first()
+    )
+    kisi.full_name = "Gizli Gercek Ad"
+    db_session.commit()
+
+    r = client.post(
+        "/api/auth/users",
+        json={"email": "a.yarismaci@t3.org", "full_name": "TAHMIN", "roles": ["COMPETITOR"]},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 201, r.text[:200]
+    assert r.json()["full_name"] != "Gizli Gercek Ad", "baska kurumun kaydindaki ad sizdi"
+
+
+# --- Arama jokerleri --------------------------------------------------
+
+def test_arama_JOKER_kabul_etmiyor(client, iki_kurum):
+    """Ucun savunmasi "arama TAM ESLESME, joker yok" iddiasina dayaniyor.
+
+    `ilike` LIKE'in `%` ve `_` jokerlerini yorumluyordu; `?email=%` tek bir
+    istekle rastgele bir kullaniciyi getiriyordu. Kurum filtresi yine de
+    tutuyordu - ama iki savunmadan birinin calismadigini bilmeden digerine
+    guvenmis oluyorduk.
+    """
+    for desen in ("%", "%@t3.org", "_.yarismaci@t3.org"):
+        r = client.get(
+            "/api/reports/lookup", params={"email": desen}, headers=iki_kurum["a_yonetici"]
+        )
+        assert r.status_code == 200, (desen, r.text[:120])
+        assert r.json() == [], f"joker {desen!r} eslesti: {r.json()}"
+
+    # TAM eslesme hala calismali (buyuk/kucuk harf duyarsiz)
+    r = client.get(
+        "/api/reports/lookup",
+        params={"email": "A.Yarismaci@T3.ORG"},
+        headers=iki_kurum["a_yonetici"],
+    )
+    assert len(r.json()) == 1, r.json()

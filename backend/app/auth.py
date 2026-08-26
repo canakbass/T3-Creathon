@@ -98,10 +98,27 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     # yayildiginda kaldirilacak ve kurumsuz token hicbir veri ucuna
     # gecemeyecek - "kurumsuz token = kapsamsiz sorgu", bugunku "rolsuz
     # token = filtresiz sorgu" hatasinin birebir tekrari olurdu.
-    if aktif_rol is not None:
-        gecerli_roller = (
-            user.roles_in(aktif_kurum) if aktif_kurum is not None else user.role_list
+    # ROL VAR AMA KURUM YOK = ARTIK GECERSIZ BIR BILESIM.
+    #
+    # Boyle bir token yalnizca kurum kapsami eklenmeden ONCE imzalanmis
+    # olabilir (ya da JWT_SECRET_KEY ayarlanmadigi icin uydurulmus olabilir).
+    # Eskiden bu durumda rol, KURUMLAR USTU `role_list`e karsi
+    # dogrulaniyordu ve `active_org_id` bos kaldigi icin butun kurum
+    # filtreleri devre disi kaliyordu - yani en genis yetkiyi en eski token
+    # aliyordu. Rol secilmemis (ikisi de bos) token gecerli kalmaya devam
+    # ediyor: kullanici giris yapmis ama henuz secim yapmamis olabilir ve o
+    # token yalnizca /me ve /select-role icin kullanilabiliyor.
+    if aktif_rol is not None and aktif_kurum is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Bu oturum bir kuruma bagli degil. Lutfen cikip tekrar giris "
+                "yapin ve hangi kurum adina calistiginizi secin."
+            ),
         )
+
+    if aktif_rol is not None:
+        gecerli_roller = user.roles_in(aktif_kurum)
         # KURUM SORUMLUSU KENDI KURUMUNDA HER ROLU TASIYABILIR: "her role
         # bakabilmeli" istegi buradan gecmezse rol secimi basarili olur ama
         # sonraki her istek 403 dondururdu - yani secim ekrani calisir gibi

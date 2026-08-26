@@ -221,8 +221,18 @@ def revoke_role(
             detail="Bu uyenin bu kurumda boyle bir rolu yok.",
         )
 
+    db.delete(kayit)
+
     if role == "ORG_OWNER":
-        sorumlu_sayisi = (
+        # SILDIKTEN SONRA SAYIYORUZ, once degil.
+        #
+        # Once sayip sonra silmek bir TOCTOU: iki es zamanli istek de "2
+        # sorumlu var" gorup ikisi de silebilir ve kurum sorumlusuz kalir.
+        # SQLite'ta yazma kilidi bunu ortuyor, PostgreSQL READ COMMITTED'da
+        # ortmuyor. `flush` silmeyi ayni islem icinde veri tabanina yaziyor,
+        # sayim onu goruyor ve kalmadiysa islemi geri aliyoruz.
+        db.flush()
+        kalan = (
             db.query(models.UserRole)
             .filter(
                 models.UserRole.organization_id == kurum.id,
@@ -230,7 +240,8 @@ def revoke_role(
             )
             .count()
         )
-        if sorumlu_sayisi <= 1:
+        if kalan == 0:
+            db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
@@ -240,7 +251,6 @@ def revoke_role(
                 ),
             )
 
-    db.delete(kayit)
     db.commit()
     db.refresh(kullanici)
     return {

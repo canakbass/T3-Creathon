@@ -90,9 +90,19 @@ def list_referees(
 
     sonuc = []
     for h in hakemler:
-        q = db.query(models.Assignment).filter(models.Assignment.referee_id == h.id)
+        # YUK SAYACI DA KURUMLA SINIRLI. Kimlerin listelendigi zaten
+        # kurumluydu ama sayac degildi: iki kurumda birden hakem olan biri
+        # icin, B kurumunun yoneticisi A kurumundaki yukunu okuyordu -
+        # ustelik sayacin zaman icindeki artisi A'nin atama hareketini de
+        # ele veriyordu. Gosterge sayaclari icin ayni gerekceyle
+        # kapatilmisti; burasi atlanmisti.
+        q = (
+            tenancy.kurum_filtresi(db.query(models.Assignment), models.Report, current_user)
+            .join(models.Report, models.Assignment.report_id == models.Report.id)
+            .filter(models.Assignment.referee_id == h.id)
+        )
         if competition_id:
-            q = q.join(models.Report).filter(models.Report.competition_id == competition_id)
+            q = q.filter(models.Report.competition_id == competition_id)
         sonuc.append(
             {
                 "id": h.id,
@@ -182,11 +192,23 @@ def auto_assign(
         .filter(models.CompetitionReferee.competition_id == competition_id)
         .all()
     )
-    hakemler = [k.referee for k in hakem_kayitlari if k.referee]
+    # ROLU HALA DURUYOR MU: `CompetitionReferee` satiri, kisinin hakem rolu
+    # geri alindiginda SILINMIYOR. Bu liste dogrudan kullanildiginda rapor,
+    # artik giris yapip goremeyecek birine atanuyordu - rapor sessizce
+    # sirada kaliyor, kimse bakmadigi icin de fark edilmiyordu.
+    kurum_hakemleri = set(
+        tenancy.kurumun_rolleri(db, tenancy.aktif_kurum(current_user), "REFEREE")
+    )
+    hakemler = [
+        k.referee for k in hakem_kayitlari if k.referee and k.referee.id in kurum_hakemleri
+    ]
     if not hakemler:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Bu yarismada gorevli hakem yok. Once hakem ekleyin.",
+            detail=(
+                "Bu yarismada gorevli ve hakem rolu duran kimse yok. "
+                "Once hakem ekleyin."
+            ),
         )
 
     secenekler = secenekler or schemas.AutoAssignOptions()
