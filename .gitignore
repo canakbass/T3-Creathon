@@ -31,3 +31,11 @@ Thumbs.db
 # Gelistirme sunucusu yardimcilari
 .dev-backend.pid
 .dev-backend.log
+
+# TESLIM BELGELERI - PUBLIC FORKA GIRMESIN.
+#
+# teslim/ altinda Is Modeli Canvasi ve proje sunumu duruyor. Fork PUBLIC
+# ve teslim tarihi henuz gecmedi: baska bir takimin is modelini ve
+# rekabet analizini okuyabilmesi icin hicbir sebep yok. Teslimden sonra
+# paylasmak istenirse bu satirlar kaldirilabilir.
+teslim/
