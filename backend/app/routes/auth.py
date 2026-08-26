@@ -218,10 +218,14 @@ def create_user(
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     """E-posta + sifre ile giris.
 
-    Yanit, kullanicinin SAHIP OLDUGU tum rolleri de icerir. Tek rolu varsa
-    token dogrudan o role gore imzalanir ve arayuz ek bir adim gostermez.
-    Birden fazla rolu varsa `active_role` null doner; arayuz rol secimi
-    gosterip /select-role cagirir.
+    Yanit, kullanicinin UYELIKLERINI (`memberships`) icerir: hangi kurumda
+    hangi rollere sahip. Rol artik tek basina bir kimlik degil - "hakem"
+    degil, "T3 Vakfi'nda hakem".
+
+    Tek kurumda tek rolu varsa token dogrudan ona gore imzalanir ve arayuz
+    ek bir adim gostermez. Birden fazla secenek varsa `active_role` ve
+    `active_organization_id` null doner; arayuz KURUM+ROL secimi gosterip
+    /select-role cagirir.
 
     OAuth2PasswordRequestForm kullaniliyor: govde JSON DEGIL form-encoded ve
     e-posta alaninin adi `username` (OAuth2 standardi).
@@ -234,6 +238,7 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    uyelikler = user.memberships
     roller = user.role_list
     if not roller:
         raise HTTPException(
@@ -241,24 +246,52 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             detail="Bu hesaba hicbir rol tanimlanmamis. Yonetici ile iletisime gecin.",
         )
 
+    # Secenek = (kurum, rol) cifti. Rol tek basina secilemez; ayri ayri
+    # secilirse "kurum secildi ama rol secilmedi" gibi yarim durumlar olusur
+    # ve o yarim tokenin ne gorecegi her rotada ayri ayri dusunulmek zorunda
+    # kalir. Tek atomik secim bu sinifi tumden yok ediyor.
+    secenekler = [
+        (u["organization_id"], rol) for u in uyelikler for rol in u["roles"]
+    ]
+
     # OAuth2'nin `scope` alani ile dogrudan rol istenebiliyor. Arayuz rol
     # secim ekranindan sonra bunu kullaniyor, boylece ikinci bir istek
     # gerekmiyor.
+    # `scope` ile dogrudan secim: "ROL" ya da "org_id:ROL". Ikinci bicim
+    # kurumu da belirtiyor; ilki geriye donuk uyumluluk icin duruyor ve
+    # kullanicinin TEK kurumu varsa calisiyor.
     istenen = (form_data.scopes or [None])[0]
-    if istenen is not None and istenen not in roller:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Bu hesabin '{istenen}' rolu yok. Sahip oldugu roller: {', '.join(roller)}.",
-        )
+    aktif_rol = aktif_kurum = None
+    if istenen:
+        if ":" in istenen:
+            aktif_kurum, aktif_rol = istenen.split(":", 1)
+        else:
+            aktif_rol = istenen
+            kurumlar = {o for o, r in secenekler if r == aktif_rol}
+            if len(kurumlar) == 1:
+                aktif_kurum = next(iter(kurumlar))
+        if (aktif_kurum, aktif_rol) not in secenekler:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Bu hesabin secili kurumda '{aktif_rol}' rolu yok. "
+                    "Uyelikleriniz icin giris yanitindaki `memberships` alanina bakin."
+                ),
+            )
+    elif len(secenekler) == 1:
+        aktif_kurum, aktif_rol = secenekler[0]
 
-    aktif = istenen if istenen else (roller[0] if len(roller) == 1 else None)
-    token = auth.create_access_token(data={"sub": user.email, "role": aktif})
+    token = auth.create_access_token(
+        data={"sub": user.email, "role": aktif_rol, "org": aktif_kurum}
+    )
 
     return {
         "access_token": token,
         "token_type": "bearer",
         "roles": roller,
-        "active_role": aktif,
+        "active_role": aktif_rol,
+        "active_organization_id": aktif_kurum,
+        "memberships": uyelikler,
         "user": _kullanici_yaniti(user),
     }
 
@@ -272,24 +305,51 @@ def select_role(
     """Aktif rolu degistirir ve O ROLE gore imzalanmis YENI bir token doner.
 
     NEDEN YENI TOKEN: yetki kontrolu sunucu tarafinda kaliyor. Arayuz
-    "ben simdi hakemim" diyerek rol degistiremez; rolu token tasiyor ve
-    token'i yalnizca sunucu imzalayabiliyor.
+    "ben simdi hakemim" ya da "ben simdi B kurumundayim" diyerek yetki
+    degistiremez; ikisini de token tasiyor ve token'i yalnizca sunucu
+    imzalayabiliyor.
+
+    KURUM VE ROL TEK SECIM: `organization_id` verilmezse ve kullanicinin o
+    role sahip oldugu TEK bir kurum varsa ondan turetiliyor; birden fazlaysa
+    secim ZORUNLU - yanlis kurumda islem yapmak, baska bir kurumun verisine
+    dokunmak demek.
     """
-    if secim.role not in current_user.role_list:
+    uyelikler = current_user.memberships
+    secenekler = [(u["organization_id"], rol) for u in uyelikler for rol in u["roles"]]
+
+    kurum = secim.organization_id
+    if kurum is None:
+        adaylar = {o for o, r in secenekler if r == secim.role}
+        if len(adaylar) == 1:
+            kurum = next(iter(adaylar))
+        elif len(adaylar) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"'{secim.role}' rolune birden fazla kurumda sahipsiniz; "
+                    "hangi kurum adina calisacaginizi secin (organization_id)."
+                ),
+            )
+
+    if (kurum, secim.role) not in secenekler:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                f"Bu hesabin '{secim.role}' rolu yok. "
-                f"Sahip oldugu roller: {', '.join(current_user.role_list)}."
+                f"Bu hesabin secili kurumda '{secim.role}' rolu yok. "
+                f"Uyelikler: {', '.join(u['organization_id'] + '=' + '/'.join(u['roles']) for u in uyelikler) or 'yok'}."
             ),
         )
 
-    token = auth.create_access_token(data={"sub": current_user.email, "role": secim.role})
+    token = auth.create_access_token(
+        data={"sub": current_user.email, "role": secim.role, "org": kurum}
+    )
     return {
         "access_token": token,
         "token_type": "bearer",
         "roles": current_user.role_list,
         "active_role": secim.role,
+        "active_organization_id": kurum,
+        "memberships": uyelikler,
         "user": _kullanici_yaniti(current_user),
     }
 

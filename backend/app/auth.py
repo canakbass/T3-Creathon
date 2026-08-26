@@ -60,9 +60,13 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     (`active_role`) ekleniyor. Boylece rotalar ve RoleChecker "bu istek
     hangi rolle yapiliyor" sorusunu yanitlayabiliyor.
 
-    Aktif rol, kullanicinin veri tabanindaki roller listesine karsi da
-    DOGRULANIYOR: bir kullanicinin rolu geri alindiginda elindeki eski
-    token o rolu kullanmaya devam edememeli.
+    AKTIF KURUM da ayni sekilde tasiniyor (`active_org_id`) ve ayni sertlikte
+    dogrulaniyor. Rol artik tek basina bir kimlik degil: "hakem" bir kimlik
+    degil, "T3 Vakfi'nda hakem" bir kimlik.
+
+    Hem rol hem kurum, kullanicinin veri tabanindaki UYELIGINE karsi
+    DOGRULANIYOR: kullanici kurumdan cikarildiginda ya da rolu geri
+    alindiginda elindeki eski token o yetkiyi kullanmaya devam edememeli.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -74,7 +78,9 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
-        token_data = schemas.TokenData(email=email, role=payload.get("role"))
+        token_data = schemas.TokenData(
+            email=email, role=payload.get("role"), organization_id=payload.get("org")
+        )
     except jwt.PyJWTError:
         raise credentials_exception
 
@@ -83,18 +89,43 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exception
 
     aktif_rol = token_data.role
-    if aktif_rol is not None and aktif_rol not in user.role_list:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"Bu hesap artik '{aktif_rol}' rolune sahip degil. "
-                "Lutfen tekrar giris yapin."
-            ),
-        )
+    aktif_kurum = token_data.organization_id
 
-    # SQLAlchemy nesnesine gecici nitelik: veri tabanina yazilmaz.
+    # ROL, AKTIF KURUMDAKI uyelige karsi dogrulaniyor.
+    #
+    # Kurum tasimayan eski tokenlar icin (gecis donemi) global listeye
+    # dusuluyor. Bu GECICI bir tolerans; kurum kapisi tum uc noktalara
+    # yayildiginda kaldirilacak ve kurumsuz token hicbir veri ucuna
+    # gecemeyecek - "kurumsuz token = kapsamsiz sorgu", bugunku "rolsuz
+    # token = filtresiz sorgu" hatasinin birebir tekrari olurdu.
+    if aktif_rol is not None:
+        gecerli_roller = (
+            user.roles_in(aktif_kurum) if aktif_kurum is not None else user.role_list
+        )
+        if aktif_rol not in gecerli_roller:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Bu hesap artik '{aktif_rol}' rolune sahip degil"
+                    + (" (secili kurumda)." if aktif_kurum else ".")
+                    + " Lutfen tekrar giris yapin."
+                ),
+            )
+
+    # SQLAlchemy nesnesine gecici nitelikler: veri tabanina yazilmaz.
     user.active_role = aktif_rol
+    user.active_org_id = aktif_kurum
     return user
+
+
+def get_active_org(current_user: models.User = Depends(get_current_user)):
+    """Istegin yapildigi AKTIF KURUM - veri donduren her uc nokta almali.
+
+    Kurum kapsami "her rotada elle if yazmak" olarak uygulanirsa unutulan
+    tek rota sessiz bir kurumlar arasi sizinti demektir. Bu bagimlilik,
+    kapsamin nereden geldigini TEK bir yerde tanimliyor.
+    """
+    return getattr(current_user, "active_org_id", None)
 
 
 def get_active_role(current_user: models.User = Depends(get_current_user)) -> str:

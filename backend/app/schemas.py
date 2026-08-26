@@ -10,6 +10,9 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     email: Optional[str] = None
     role: Optional[str] = None
+    # Istegin yapildigi kurum. Rol artik tek basina bir kimlik degil -
+    # "hakem" degil, "T3 Vakfi'nda hakem".
+    organization_id: Optional[str] = None
 
 
 # --- User Schemas ---
@@ -49,6 +52,10 @@ class UserLogin(BaseModel):
 
 class RoleSelection(BaseModel):
     role: str
+    # Hangi kurum adina. Verilmezse ve o role tek kurumda sahipse turetiliyor;
+    # birden fazlaysa secim ZORUNLU - yanlis kurumda islem yapmak, baska bir
+    # kurumun verisine dokunmak demek.
+    organization_id: Optional[str] = None
 
 class UserResponse(BaseModel):
     id: str
@@ -244,6 +251,12 @@ class AutoAssignResult(BaseModel):
     skipped: List[SkippedAssignment] = []
 
 
+class Membership(BaseModel):
+    organization_id: str
+    organization_name: Optional[str] = None
+    roles: List[str]
+
+
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str
@@ -252,6 +265,11 @@ class LoginResponse(BaseModel):
     # Token'in imzalandigi rol. Cok-rollu kullanici henuz secmediyse None -
     # arayuz bu durumda rol secim ekrani gosterir.
     active_role: Optional[str] = None
+    # Token'in imzalandigi kurum. Rol gibi, secilmemisse None.
+    active_organization_id: Optional[str] = None
+    # Kullanicinin hangi kurumda hangi rollere sahip oldugu. Arayuz secim
+    # ekranini bundan kuruyor.
+    memberships: List[Membership] = []
     user: UserResponse
 
 

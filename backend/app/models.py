@@ -458,6 +458,17 @@ class Report(Base):
     # ve takim kavrami olmayan test/demo raporlari icin. Takimi olmayan
     # raporda erisim eski davranisa (yalnizca yukleyen) dusuyor.
     team_id = Column(String, ForeignKey("teams.id"), nullable=True, index=True)
+    # Raporun ait oldugu KURUM.
+    #
+    # NEDEN TURETILMIYOR: kurum Competition uzerinden turetilebilirdi ama
+    # `competition_id` NULLABLE. Ic birlesimle turetirsek yarismasiz raporlar
+    # HERKESTEN gizlenir; dis birlesimle turetirsek kurum NULL kalir ve
+    # HERKESE gorunur. Ikinci hata sessizdir - tam olarak "kismi
+    # cok-kurumluluk" tuzagi. Kendi kolonu olmasi, hicbir yolun kurumsuz
+    # rapor uretememesini de garanti ediyor.
+    organization_id = Column(
+        String, ForeignKey("organizations.id"), nullable=True, index=True
+    )
     submission_date = Column(DateTime, default=_utcnow)
 
     submitted_by = relationship("User", back_populates="reports")

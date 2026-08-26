@@ -202,6 +202,21 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
         karsilastirma_sorgusu = db.query(models.Report).filter(
             models.Report.id != report_id
         )
+        # KURUMLAR ARASI KARSILASTIRMA YOK.
+        #
+        # Iki sebep: (1) GIZLILIK - bulgu metni karsilastirilan raporun
+        # kimligini tasiyor; kurumlar arasi havuz, bir kurumun basvuru
+        # kimliklerini digerine sizdirir. Sartname de "erisilen T3 Vakfi
+        # verileri ucuncu taraflarla paylasilamaz" diyor. (2) DOGRULUK -
+        # esikler tek bir yarismanin 34 gercek raporunda kalibre edildi;
+        # havuza baska kurumlarin farkli sablonlu belgeleri karisinca taban
+        # oran degisir ve hakeme gosterilen referans cumlesi yalan olur.
+        # Ayrica hakem, gosteremedigi bir belgeye dayanan intihal suclamasi
+        # yapamaz - islem yapilabilir bir bulgu degildir.
+        if report.organization_id:
+            karsilastirma_sorgusu = karsilastirma_sorgusu.filter(
+                models.Report.organization_id == report.organization_id
+            )
         # AYNI TAKIMIN kendi raporlari karsilastirmadan CIKARILIYOR.
         #
         # Sartname madde 5: "BASVURULAR ARASINDA yuksek benzerlik gosteren
@@ -498,6 +513,10 @@ async def upload_report(
         competition_id=competition.id if competition else None,
         submitted_by_id=current_user.id,
         team_id=takim.id if takim else None,
+        # Kurum TAKIMDAN geliyor: takim zorunlu oldugu icin her raporun bir
+        # kurumu oluyor. Yarismadan turetmek yanlis olurdu - competition_id
+        # nullable ve o yol kurumsuz rapor uretebilir.
+        organization_id=takim.organization_id if takim else None,
         submission_date=datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     )
     
@@ -543,6 +562,16 @@ def _rapora_erisebilir_mi(report: models.Report, user: models.User) -> bool:
     taslagi, karar) bunu cagirmali. Listeleme icin ayni kurallarin SQL
     karsiligi _erisim_filtresi'nde - ikisi birlikte degismeli.
     """
+    # KURUM ON-EK VE-KAPISI - rol dallarindan ONCE.
+    #
+    # NEDEN ROL DALLARININ ICINDE DEGIL: yonetici dali `return True` ile
+    # filtresiz donuyor. Kurum kontrolu dallarin icine yazilirsa TAM O SATIR
+    # unutulur ve bir kurumun yoneticisi her kurumun her raporunu gorur.
+    # On-ek olarak yazilinca, yarin eklenecek yeni bir rol dali da varsayilan
+    # olarak kurum-kapali dogar (fail-closed).
+    if not _ayni_kurum_mu(report, user):
+        return False
+
     aktif = getattr(user, "active_role", None)
     if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
         return True
@@ -551,6 +580,22 @@ def _rapora_erisebilir_mi(report: models.Report, user: models.User) -> bool:
     if aktif == "REFEREE":
         return report.assignment is not None and report.assignment.referee_id == user.id
     return False
+
+
+def _ayni_kurum_mu(report: models.Report, user: models.User) -> bool:
+    """Rapor, istegin yapildigi kuruma mi ait.
+
+    Gecis donemi toleransi: kurumu OLMAYAN raporlar (yarisma akisi devreye
+    girmeden once yuklenmis eski kayitlar) ve kurumu OLMAYAN tokenlar
+    engellenmiyor. Bu tolerans GECICI; kurum kapsami tum uc noktalara
+    yayilip eski kayitlar tasindiginda kaldirilacak ve kurumsuz olan her sey
+    reddedilecek.
+    """
+    rapor_kurum = report.organization_id
+    aktif_kurum = getattr(user, "active_org_id", None)
+    if rapor_kurum is None or aktif_kurum is None:
+        return True
+    return rapor_kurum == aktif_kurum
 
 
 def _yarismacinin_raporu_mu(report: models.Report, user: models.User) -> bool:
@@ -581,6 +626,18 @@ def _erisim_filtresi(query, user: models.User, db: Session):
     gormemesi gereken raporu sizdirir.
     """
     aktif = _rol_yoksa_reddet(user)
+
+    # KURUM ON-EKI - rol dallarindan ONCE ve HEPSININ USTUNE.
+    # Yonetici dali `return query` ile filtresiz donuyor; kurum kosulu o
+    # dalin icine yazilirsa tek satirlik bir unutma sistemi tek kurumluga
+    # geri dondurur ve hicbir mevcut test bunu yakalamaz.
+    aktif_kurum = getattr(user, "active_org_id", None)
+    if aktif_kurum is not None:
+        query = query.filter(
+            (models.Report.organization_id == aktif_kurum)
+            | (models.Report.organization_id.is_(None))  # gecis donemi
+        )
+
     if aktif in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
         return query
     if aktif == "COMPETITOR":
@@ -625,6 +682,17 @@ def _rapor_getir_yetkiliyse(report_id: str, user: models.User, db: Session) -> m
     if not report:
         raise HTTPException(status_code=404, detail="Report not found.")
     _rol_yoksa_reddet(user)
+
+    # YABANCI KURUM -> 404, kayit hic yokmus gibi. AYNI govde metniyle.
+    #
+    # Kurum ICINDE 403 dogru tercih (yukaridaki gerekce gecerli: kimlikler
+    # tahmin edilebilir, net mesaj hakeme yardim eder). Kurum SINIRINDA ise
+    # 403 "bu kimlik baska bir kurumda VAR" bilgisini onaylar - yani bir
+    # varlik kahini (oracle) olur. Kimligi elinde tutan biri, 403 ile 404
+    # farkindan baska kurumun basvuru kimliklerini dogrulayabilir.
+    if not _ayni_kurum_mu(report, user):
+        raise HTTPException(status_code=404, detail="Report not found.")
+
     if not _rapora_erisebilir_mi(report, user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -778,6 +846,21 @@ def lookup_reports(
         anahtar = "email"
 
     aktif = getattr(current_user, "active_role", None)
+    aktif_kurum = getattr(current_user, "active_org_id", None)
+
+    # YABANCI KURUM -> sonuc kumesinden CIKARILIYOR, hata donmuyor.
+    #
+    # Bu bir LISTE uc noktasi ve sozlesmesi zaten "eslesme yoksa 200 + []"
+    # (olmayan e-posta icin aynen bunu yapiyor). 403 "bu kayit var ama senin
+    # degil" demektir; e-posta anahtariyla birlesince "bu kisinin sistemde
+    # basvurusu var mi" kahinine donusur - baska bir kurumun katilimci
+    # listesini sizdirmak demektir.
+    if aktif_kurum is not None:
+        q = q.filter(
+            (models.Report.organization_id == aktif_kurum)
+            | (models.Report.organization_id.is_(None))
+        )
+
     sonuc = []
     for r in q.order_by(models.Report.submission_date.desc()).limit(50).all():
         atanmis = r.assignment is not None and r.assignment.referee_id == current_user.id
@@ -895,15 +978,14 @@ def get_report_file(
     `download=false` (varsayilan) tarayicinin gomulu goruntuleyicisinde
     acilmasi icin `inline` doner; `download=true` indirme baslatir.
     """
-    report = db.query(models.Report).filter(models.Report.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
-
-    if not _rapora_erisebilir_mi(report, current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bu raporun dosyasina erisim yetkiniz yok.",
-        )
+    # TEK KAPIDAN geciyor. Onceden kendi sorgusunu yapip
+    # _rapora_erisebilir_mi cagiriyordu; sonuc olarak yabanci kurumun raporu
+    # icin 403 donuyordu - yani "bu kayit VAR ama senin degil" diyordu.
+    # /{report_id} 404 donerken bu uc nokta 403 donunce, saldirgan iki ucu
+    # karsilastirarak baska kurumun rapor kimliklerini DOGRULAYABILIYORDU.
+    # Uc uc noktanin da ayni kapidan gecmesi, ayni cevabi vermelerini garanti
+    # ediyor.
+    report = _rapor_getir_yetkiliyse(report_id, current_user, db)
 
     uzanti = Path(report.file_path).suffix.lower()
     medya_tipi = storage.media_type(report.file_path)
@@ -987,14 +1069,10 @@ def rationale_draft(
         Sonradan itiraz olursa "bu gerekceyi kim yazdi" sorusunun cevabi
         kayitli.
     """
-    report = db.query(models.Report).filter(models.Report.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
-    if not _rapora_erisebilir_mi(report, current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bu rapor size atanmamis.",
-        )
+    # TEK KAPIDAN geciyor (bkz. get_report_file). Eski hali "Bu rapor size
+    # atanmamis." diyordu - raporun VAR OLDUGUNU ve BIRINE ATANDIGINI birden
+    # sizdiran bir mesaj.
+    report = _rapor_getir_yetkiliyse(report_id, current_user, db)
     if not report.ai_analysis:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
