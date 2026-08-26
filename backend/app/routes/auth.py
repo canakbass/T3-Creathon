@@ -1,32 +1,38 @@
 import os
 import secrets
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from .. import models, schemas, auth, tenancy
+from ..services import notify
+from .. import models, schemas, auth, tenancy, jetonlar
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
-# KENDI KENDINE KAYIT VARSAYILAN OLARAK KAPALI.
+# KENDI KENDINE KAYIT ARTIK ACIK (varsayilan).
 #
-# NEDEN: bir raporun sonucunu TAKIM UYELIGI belirliyor ve uyelik e-postaya
-# bagli. Kayit acik olsaydi, bir takim uyesinin e-postasini ILK KAYDETTIREN
-# kisi o takimin sonuclarini gorurdu - e-posta dogrulamamiz yok. Ayni sekilde
-# herkes kendine REFEREE rolu verip /api/reports/lookup ile her basvurunun
-# kunyesini gorebilirdi.
+# BIR SURE KAPALIYDI ve sebebi ciddiydi: raporun sonucunu TAKIM UYELIGI
+# belirliyor, uyelik e-postaya bagli ve e-posta dogrulamamiz yoktu - yani bir
+# takim uyesinin e-postasini ILK KAYDETTIREN kisi o takimin sonuclarini
+# gorurdu.
 #
-# T3'un mevcut pratigi de bu: hesaplar "belirlenen mail + uretilmis guvenli
-# sifre" seklinde aciliyor ve sifre kullaniciya iletiliyor (BGYS gibi diger
-# sistemlerini de boyle entegre etmisler). Bizde karsiligi
-# POST /api/auth/users - yalnizca yonetici cagirabiliyor.
+# NE DEGISTI: (1) e-posta dogrulama eklendi, (2) kayit ARTIK HICBIR ROL VE
+# HICBIR KURUM VERMIYOR. Takim bagi kayit aninda degil DOGRULAMA aninda
+# kuruluyor. Yani kayit olmak tek basina hicbir sey acmiyor; acan sey posta
+# kutusuna erisebildigini kanitlamak.
 #
-# Varsayilan KAPALI olmasi bilincli: yapilandirmayi unutmak GUVENLIGI
-# ARTIRIR, azaltmaz. Testler bu degiskeni acikca aciyor (bkz. conftest.py).
+# Yonetici hesap acmaya devam ediyor (POST /api/auth/users) ve o hesaplar
+# dogrulanmis sayiliyor - orada kimlige YONETICI kefil oluyor. Iki yol
+# birbirinin yerine gecmiyor, birbirini tamamliyor:
+#   * yonetici yolu: kimlik garantili, sifre iletilmesi gerekiyor
+#   * kendi kaydi:   kimlik posta kutusuyla kanitlaniyor, sifre kullanicinin
+#
+# SELF_REGISTRATION=0 ile kapatilabilir (kurum icine kapali kurulumlar icin).
 def _kendi_kaydi_acik() -> bool:
-    return os.getenv("SELF_REGISTRATION", "0").strip().lower() in ("1", "true", "evet")
+    return os.getenv("SELF_REGISTRATION", "1").strip().lower() in ("1", "true", "evet")
 
 
 # Kendi kendine kayit (SELF_REGISTRATION=1) acikken yeni hesaplarin
@@ -94,84 +100,250 @@ def _rol_ver(db: Session, user: models.User, roller, organization_id=None) -> No
 
 
 @router.post(
-    "/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED
+    "/register", response_model=schemas.RegistrationResult, status_code=status.HTTP_202_ACCEPTED
 )
-def register(user_in: schemas.UserCreate, db: Session = Depends(get_db)):
-    """Yeni kullanici kaydi - VARSAYILAN OLARAK KAPALI.
+def register(
+    user_in: schemas.UserCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Kendi kendine kayit + E-POSTA DOGRULAMA.
 
-    Acmak icin SELF_REGISTRATION=1. Kapali olmasinin gerekcesi icin
-    yukaridaki _kendi_kaydi_acik notuna bakin; hesaplari yonetici acar
-    (POST /api/auth/users).
+    NEDEN TEKRAR ACIK: kullanicinin istegi - "kullanici kendi kendine de
+    hesap olusturabilsin, sifremi unuttum gibi islemler yapabilsin".
 
-    `roles` listesi verilebilir (bir kullanicinin birden fazla rolu olabilir).
-    Geriye donuk uyumluluk icin tekil `role` alani da kabul ediliyor.
+    NEDEN KAPALIYDI: raporun sonucunu TAKIM UYELIGI belirliyor ve uyelik
+    e-postaya bagli; kayit acik olsaydi bir takim uyesinin e-postasini ILK
+    KAYDETTIREN kisi o takimin sonuclarini gorurdu.
+
+    DOGRULAMA BU ACIGI KAPATIYOR, AMA TEK BIR KOSULLA: takim bagi KAYIT
+    aninda degil DOGRULAMA aninda kuruluyor. Aksi halde saldirgan kayit
+    olur, dogrulamaz ve bag yine kurulmus olurdu.
+
+    UC SEY BILINCLI:
+
+    1. HIC ROL VERILMIYOR. Govdedeki `roles`/`role` alanlari TAMAMEN yok
+       sayiliyor. Kara liste (AYRICALIKLI_ROLLER) yetmezdi: `REFEREE` o
+       listede degil ve kendine hakem rolu veren biri /reports/lookup ile
+       kurumun butun basvuru kunyelerini okuyabilirdi. Rol yalnizca
+       dogrulama sonrasi eslesmeyle ve yalnizca COMPETITOR olarak geliyor.
+
+    2. HIC KURUM VERILMIYOR. Onceden varsayilan kuruma yaziliyordu, yani
+       "kayit formu = T3 Vakfi uyeligi" demekti. Kuruma giris yalnizca iki
+       yolla: sorumlu rol verir, ya da DOGRULANMIS e-posta bir bekleyen
+       takim uyeligiyle eslesir.
+
+    3. YANIT HER DURUMDA AYNI. "Bu e-posta zaten kayitli" demek bir VARLIK
+       KAHINI olurdu - herhangi biri adres deneyerek sistemde kimin hesabi
+       oldugunu ogrenirdi. Adres zaten varsa SAHIBINE "hesabin var" mektubu
+       gidiyor; farki yalnizca posta kutusunun sahibi goruyor.
     """
     if not _kendi_kaydi_acik():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                "Kendi kendine kayit kapali. Hesabinizi yarisma yoneticisi "
+                "Kendi kendine kayit kapali. Hesabinizi kurumunuzun yoneticisi "
                 "acar ve giris bilgileri size iletilir."
             ),
         )
 
-    existing_user = db.query(models.User).filter(models.User.email == user_in.email).first()
-    if existing_user:
+    eposta = (user_in.email or "").strip().lower()
+    if len(user_in.password or "") < 8:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Bu e-posta adresi zaten kayitli.",
+            detail="Sifre en az 8 karakter olmali.",
         )
 
-    istenen_roller = list(user_in.roles) if user_in.roles else []
-    if user_in.role:
-        istenen_roller.append(user_in.role)
-    # Tekrarlari at, sirayi koru
-    istenen_roller = list(dict.fromkeys(istenen_roller))
+    mevcut = db.query(models.User).filter(func.lower(models.User.email) == eposta).first()
+    jeton = None
 
-    gecersiz = [r for r in istenen_roller if r not in models.ROLLER]
-    if gecersiz:
+    if mevcut is not None:
+        # Sahibine haber ver, cagirana AYNI cevabi don.
+        background_tasks.add_task(notify.zaten_kayitli_mektubu, eposta)
+    else:
+        kullanici = models.User(
+            id=str(uuid.uuid4()),
+            email=eposta,
+            password_hash=auth.hash_password(user_in.password),
+            full_name=user_in.full_name,
+            email_verified=False,
+        )
+        db.add(kullanici)
+        db.flush()
+        jeton = jetonlar.uret(db, kullanici.id, jetonlar.DOGRULAMA)
+        background_tasks.add_task(notify.dogrulama_mektubu, eposta, jeton)
+
+    db.commit()
+    return {
+        "message": (
+            "Bu adres kullanilabilirse dogrulama baglantisi gonderildi. "
+            "Gelen kutunuzu (ve spam klasorunu) kontrol edin."
+        ),
+        # YALNIZCA gelistirmede dolu (DEV_EXPOSE_EMAIL_TOKEN=1 ve SMTP disi).
+        # Uretimde None - jetonu yanitta dondurmek dogrulamayi anlamsiz kilar.
+        "dev_token": jeton if notify.jeton_yanitta_gorunsun_mu() else None,
+    }
+
+
+@router.post("/verify-email", response_model=schemas.VerificationResult)
+def verify_email(
+    govde: schemas.TokenSubmit,
+    db: Session = Depends(get_db),
+):
+    """E-postayi dogrular ve BEKLEYEN TAKIM UYELIKLERINI baglar.
+
+    BAGLAMA ANI TAM OLARAK BURASI ve tek islem icinde: dogrulanmamis bir
+    hesap hicbir takima, hicbir kuruma, hicbir role sahip degil.
+    """
+    kullanici = jetonlar.tuket(db, govde.token, jetonlar.DOGRULAMA)
+    if kullanici is None:
+        # "Yok", "suresi dolmus" ve "kullanilmis" AYNI cevabi veriyor.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Gecersiz rol: {', '.join(gecersiz)}. Gecerli roller: {', '.join(models.ROLLER)}.",
-        )
-
-    # AYRICALIKLI ROL KENDI KENDINE ALINAMAZ.
-    #
-    # Bu kontrol create_user'da vardi, BURADA YOKTU - yani kayit acildiginda
-    # (SELF_REGISTRATION=1) herhangi biri govdeye `roles: ["ORG_OWNER"]`
-    # yazip varsayilan kurumun sorumlusu olabiliyordu: uye rehberini
-    # okuyabilir, kendine ve baskalarina rol dagitabilirdi. Yukaridaki
-    # gerekce yalnizca kendi kendine REFEREE almayi dusunmustu; ayni listede
-    # ORG_OWNER'in da durdugunu kimse fark etmemisti.
-    #
-    # `conftest.py` bu bayragi testler icin aciyor - yani hatanin gizli
-    # kalmasi degil, gorunur olmasi gereken bir yerdeydi.
-    ayricalikli = [r for r in istenen_roller if r in models.AYRICALIKLI_ROLLER]
-    if ayricalikli:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                f"{', '.join(ayricalikli)} rolu kendi kendine alinamaz; "
-                "bu rolleri yalnizca kurum sorumlusu verebilir."
+                "Bu dogrulama baglantisi gecersiz ya da suresi dolmus. "
+                "Giris ekranindan yeni bir baglanti isteyin."
             ),
         )
-    if not istenen_roller:
-        # Rol belirtilmemisse en dusuk yetkili rolu veriyoruz - bos rolle
-        # kayitli bir kullanici hicbir sey yapamaz ve kafa karistirir.
-        istenen_roller = ["COMPETITOR"]
-
-    db_user = models.User(
-        id=str(uuid.uuid4()),
-        email=user_in.email,
-        password_hash=auth.hash_password(user_in.password),
-        full_name=user_in.full_name,
-    )
-    db.add(db_user)
-    db.flush()  # user.id kullanilabilsin diye
-    _rol_ver(db, db_user, istenen_roller, _varsayilan_kurum_id(db))
+    kullanici.email_verified = True
+    baglanan = _bekleyen_uyelikleri_bagla(db, kullanici)
     db.commit()
-    db.refresh(db_user)
-    return _kullanici_yaniti(db_user)
+    return {
+        "message": "E-posta adresiniz dogrulandi.",
+        "linked_teams": baglanan,
+    }
+
+
+@router.post("/resend-verification", status_code=status.HTTP_202_ACCEPTED)
+def resend_verification(
+    govde: schemas.EmailSubmit,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Dogrulama baglantisini yeniden gonderir - HER ZAMAN ayni cevap."""
+    eposta = (govde.email or "").strip().lower()
+    kullanici = db.query(models.User).filter(func.lower(models.User.email) == eposta).first()
+    if (
+        kullanici is not None
+        and not kullanici.email_verified
+        and not jetonlar.cok_sik_mi(db, kullanici.id, jetonlar.DOGRULAMA)
+    ):
+        jeton = jetonlar.uret(db, kullanici.id, jetonlar.DOGRULAMA)
+        background_tasks.add_task(notify.dogrulama_mektubu, eposta, jeton)
+        db.commit()
+    return {"message": "Bu adres dogrulama bekliyorsa baglanti gonderildi."}
+
+
+@router.post("/password-reset/request", status_code=status.HTTP_202_ACCEPTED)
+def password_reset_request(
+    govde: schemas.EmailSubmit,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Sifre sifirlama baglantisi ister.
+
+    VARLIK KAHINI OLMAMALI - iki taraflı:
+
+    1. YANIT hep ayni: 202 + ayni metin. Kayitli olmayan adres icin de.
+    2. ZAMANLAMA da ayni olmali. Kayitli dalda jeton uretimi + veri tabani
+       yazma + SMTP var; kayitsiz dalda yok. SMTP'yi istek icinde
+       bekleseydik fark milisaniyeden buyuk olur ve OLCULEBILIRDI. Gonderim
+       ARKA PLAN gorevine aliniyor, yani iki dal da aninda donuyor.
+
+    Hiz siniri da ayni sekilde SESSIZ: sinira takilan istek 429 degil yine
+    202 aliyor, yoksa "hizli deneyince farkli cevap veriyor" yeni bir kahin
+    olurdu.
+    """
+    eposta = (govde.email or "").strip().lower()
+    kullanici = db.query(models.User).filter(func.lower(models.User.email) == eposta).first()
+    if kullanici is not None and not jetonlar.cok_sik_mi(db, kullanici.id, jetonlar.SIFIRLAMA):
+        jeton = jetonlar.uret(db, kullanici.id, jetonlar.SIFIRLAMA)
+        background_tasks.add_task(notify.sifirlama_mektubu, eposta, jeton)
+        db.commit()
+    return {"message": "Bu adres kayitliysa sifirlama baglantisi gonderildi."}
+
+
+@router.post("/password-reset/confirm")
+def password_reset_confirm(
+    govde: schemas.PasswordReset,
+    db: Session = Depends(get_db),
+):
+    """Sifreyi degistirir ve ELDEKI TUM OTURUMLARI dusurur.
+
+    OTURUM DUSURME SART: token 60 dakika gecerli ve rol/kurum veri tabanina
+    karsi dogrulaniyor ama SIFRE dogrulanmiyordu - yani calinmis bir token,
+    kurban sifresini sifirladiktan SONRA da bir saat daha calisiyordu. Bu,
+    sifre sifirlamanin tek amacini ("hesabi geri al") ortadan kaldiriyordu.
+    `token_epoch` artiyor ve o ana kadar imzalanmis her token oluyor.
+    """
+    if len(govde.new_password or "") < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sifre en az 8 karakter olmali.",
+        )
+    kullanici = jetonlar.tuket(db, govde.token, jetonlar.SIFIRLAMA)
+    if kullanici is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Bu sifirlama baglantisi gecersiz ya da suresi dolmus. "
+                "Yeni bir baglanti isteyin."
+            ),
+        )
+    kullanici.password_hash = auth.hash_password(govde.new_password)
+    kullanici.token_epoch = (kullanici.token_epoch or 0) + 1
+    # Sifirlama hesabin ele gecirilmis olabilecegi anlamina geliyor: o ana
+    # kadar uretilmis HER baglanti (dogrulama dahil) olmeli.
+    jetonlar.hepsini_dusur(db, kullanici.id)
+    # Sifresini e-posta uzerinden sifirlayabilen kisi o kutuya erisiyor
+    # demektir - bu, dogrulamanin ta kendisi.
+    kullanici.email_verified = True
+    baglanan = _bekleyen_uyelikleri_bagla(db, kullanici)
+    db.commit()
+    return {
+        "message": "Sifreniz degistirildi. Yeni sifrenizle giris yapabilirsiniz.",
+        "linked_teams": baglanan,
+    }
+
+
+def _bekleyen_uyelikleri_bagla(db: Session, kullanici: models.User) -> int:
+    """Dogrulanmis e-postayi bekleyen takim uyeliklerine baglar.
+
+    Her bagli takim icin O TAKIMIN KURUMUNDA `COMPETITOR` rolu veriliyor -
+    baska rol degil, baska kurum degil. Kendi kendine kayit boylece kurum
+    sinirini asmanin yeni bir yolu OLMUYOR: kuruma giris yine yoneticinin
+    yaptigi bir eylemden (raporu o e-postayla yuklemesinden) doguyor.
+
+    KURUMU BOS OLAN TAKIMA BAGLANMIYOR: gecis donemi toleransi kurumsuz
+    kaydi herkese aciyor; kurumsuz bir uyelik uretmek o toleransi kalici
+    bir aciga cevirirdi.
+    """
+    adres = (kullanici.email or "").strip().lower()
+    bekleyenler = (
+        db.query(models.TeamMember)
+        .filter(
+            models.TeamMember.email == adres,
+            models.TeamMember.user_id.is_(None),
+        )
+        .all()
+    )
+    sayi = 0
+    for uyelik in bekleyenler:
+        takim = uyelik.team
+        if takim is None or takim.organization_id is None:
+            continue
+        uyelik.user_id = kullanici.id
+        sayi += 1
+        if "COMPETITOR" not in kullanici.roles_in(takim.organization_id):
+            db.add(
+                models.UserRole(
+                    id=str(uuid.uuid4()),
+                    user_id=kullanici.id,
+                    organization_id=takim.organization_id,
+                    role="COMPETITOR",
+                )
+            )
+    return sayi
 
 
 @router.post(
@@ -389,11 +561,17 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
     uyelikler = user.memberships
     roller = user.role_list
-    if not roller:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bu hesaba hicbir rol tanimlanmamis. Yonetici ile iletisime gecin.",
-        )
+
+    # ROLSUZ HESAP GIRIS YAPABILIR, ama hicbir veri gormez.
+    #
+    # ONCEDEN 403 DONUYORDU ve bu, kendi kendine kayit akisini tamamen
+    # KILITLIYORDU: yeni kayit olan kimsenin rolu yok, giris yapamiyor,
+    # dolayisiyla "e-postani dogrula" ekranina bile ulasamiyordu.
+    #
+    # Guvenlik acisindan sorun degil: rolsuz/kurumsuz token yalnizca /me ve
+    # /select-role icin is goruyor; her veri ucu `kurum_filtresi` uzerinden
+    # 403 donduruyor (bkz. tenancy.py). Yani "girebilmek" ile "gorebilmek"
+    # ayri seyler ve ayri kaliyor.
 
     # Secenek = (kurum, rol) cifti. Rol tek basina secilemez; ayri ayri
     # secilirse "kurum secildi ama rol secilmedi" gibi yarim durumlar olusur
@@ -431,7 +609,12 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         aktif_kurum, aktif_rol = secenekler[0]
 
     token = auth.create_access_token(
-        data={"sub": user.email, "role": aktif_rol, "org": aktif_kurum}
+        data={
+            "sub": user.email,
+            "role": aktif_rol,
+            "org": aktif_kurum,
+            "epoch": user.token_epoch or 0,
+        }
     )
 
     return {
@@ -441,6 +624,9 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         "active_role": aktif_rol,
         "active_organization_id": aktif_kurum,
         "memberships": uyelikler,
+        # Arayuz "e-postanizi dogrulayin" ya da "henuz size ait bir basvuru
+        # yok" ekranlarindan hangisini gosterecegini buradan biliyor.
+        "email_verified": bool(user.email_verified),
         "user": _kullanici_yaniti(user),
     }
 
@@ -497,7 +683,12 @@ def select_role(
         )
 
     token = auth.create_access_token(
-        data={"sub": current_user.email, "role": secim.role, "org": kurum}
+        data={
+            "sub": current_user.email,
+            "role": secim.role,
+            "org": kurum,
+            "epoch": current_user.token_epoch or 0,
+        }
     )
     return {
         "access_token": token,

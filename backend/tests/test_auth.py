@@ -1,43 +1,64 @@
 import pytest
 
-def test_register_user(client):
+from tests.conftest import kullanici_ac
+
+
+def test_register_user(client, db_session):
+    """Kayit HESAP ACIYOR ama HICBIR ROL VERMIYOR.
+
+    Govdedeki `role`/`roles` alanlari TAMAMEN yok sayiliyor. Kara liste
+    (AYRICALIKLI_ROLLER) yetmezdi: `REFEREE` o listede degil ve kendine
+    hakem rolu veren biri /reports/lookup ile kurumun butun basvuru
+    kunyelerini okuyabilirdi.
+    """
+    from app import models
+
     response = client.post(
         "/api/auth/register",
         json={"email": "new_user@teknofest.org", "password": "securepwd123", "role": "REFEREE"}
     )
-    assert response.status_code == 201
-    data = response.json()
-    assert data["email"] == "new_user@teknofest.org"
-    assert data["role"] == "REFEREE"
-    assert "id" in data
-    assert "password_hash" not in data
+    assert response.status_code == 202, response.text[:200]
+    assert "dogrulama" in response.json()["message"].lower()
+
+    kullanici = (
+        db_session.query(models.User)
+        .filter(models.User.email == "new_user@teknofest.org")
+        .first()
+    )
+    assert kullanici is not None
+    assert kullanici.role_list == [], "kayit rol verdi"
+    assert kullanici.email_verified is False, "kayit hesabi dogrulanmis saydi"
 
 
-def test_register_duplicate_email(client):
-    # Register once
-    response = client.post(
+def test_register_duplicate_email_VARLIK_KAHINI_DEGIL(client):
+    """Ikinci kayit denemesi ILK deneme ile AYNI cevabi vermeli.
+
+    "Bu e-posta zaten kayitli" demek, herhangi birinin adres deneyerek
+    sistemde kimin hesabi oldugunu ogrenmesi demekti. Fark yalnizca posta
+    kutusunun sahibine gonderilen mektupta gorunuyor.
+    """
+    ilk = client.post(
         "/api/auth/register",
-        json={"email": "dup@teknofest.org", "password": "pwd1", "role": "COMPETITOR"}
+        json={"email": "dup@teknofest.org", "password": "parola1234"}
     )
-    assert response.status_code == 201
-    
-    # Register again with same email
-    response = client.post(
+    ikinci = client.post(
         "/api/auth/register",
-        json={"email": "dup@teknofest.org", "password": "pwd2", "role": "COMPETITOR"}
+        json={"email": "dup@teknofest.org", "password": "baskaparola"}
     )
-    assert response.status_code == 400
-    # Mesaj Turkce'ye cevrildi; testin amaci mesajin birebir metni degil,
-    # ayni e-postayla ikinci kaydin REDDEDILMESI.
-    assert "kayitli" in response.json()["detail"].lower()
+    assert ilk.status_code == ikinci.status_code == 202
+    assert ilk.json()["message"] == ikinci.json()["message"]
+
+
+def test_register_kisa_sifre_reddediliyor(client):
+    r = client.post(
+        "/api/auth/register", json={"email": "kisa@teknofest.org", "password": "abc"}
+    )
+    assert r.status_code == 400
+    assert "8 karakter" in r.json()["detail"]
 
 
 def test_login_user(client):
-    # Register user first
-    client.post(
-        "/api/auth/register",
-        json={"email": "login@teknofest.org", "password": "mypassword", "role": "REFEREE"}
-    )
+    kullanici_ac("login@teknofest.org", ["REFEREE"], "mypassword")
     
     # Login (form-urlencoded)
     response = client.post(
@@ -60,13 +81,9 @@ def test_login_invalid_credentials(client):
 
 
 def test_get_me(client):
-    # Register and login
     email = "me@teknofest.org"
     pwd = "password1"
-    client.post(
-        "/api/auth/register",
-        json={"email": email, "password": pwd, "role": "REFEREE"}
-    )
+    kullanici_ac(email, ["REFEREE"], pwd)
     login_res = client.post(
         "/api/auth/login",
         data={"username": email, "password": pwd}

@@ -51,6 +51,41 @@ class CreatedUser(BaseModel):
     notice: str
 
 
+class RegistrationResult(BaseModel):
+    """Kayit yaniti - HER DURUMDA AYNI.
+
+    "Bu e-posta zaten kayitli" demek bir VARLIK KAHINI olurdu: herhangi biri
+    adres deneyerek sistemde kimin hesabi oldugunu ogrenirdi. Adres zaten
+    varsa SAHIBINE bilgi mektubu gidiyor; farki yalnizca posta kutusunun
+    sahibi goruyor.
+    """
+    message: str
+    # YALNIZCA gelistirmede dolu (DEV_EXPOSE_EMAIL_TOKEN=1 ve SMTP disi).
+    # Uretimde None: jetonu yanitta dondurmek, "bu kutunun sahibi misin"
+    # sorusunu kendi kendine cevaplatmak demek olurdu.
+    dev_token: Optional[str] = None
+
+
+class TokenSubmit(BaseModel):
+    token: str
+
+
+class EmailSubmit(BaseModel):
+    email: EmailStr
+
+
+class PasswordReset(BaseModel):
+    token: str
+    new_password: str
+
+
+class VerificationResult(BaseModel):
+    message: str
+    # Dogrulama aninda baglanan bekleyen takim uyeligi sayisi. Sifir ise
+    # kullaniciya "henuz size ait bir basvuru yok" denebilir.
+    linked_teams: int = 0
+
+
 class OrganizationResponse(BaseModel):
     """Kullanicinin HANGI KURUM ADINA calistigi.
 
@@ -314,6 +349,11 @@ class LoginResponse(BaseModel):
     # Kullanicinin hangi kurumda hangi rollere sahip oldugu. Arayuz secim
     # ekranini bundan kuruyor.
     memberships: List[Membership] = []
+    # E-posta dogrulandi mi. Arayuz "e-postanizi dogrulayin" ekranini
+    # gosterip gostermeyecegini buradan biliyor - rolsuz bir hesapta bunun
+    # sebebi ya dogrulanmamis olmasi ya da henuz bir basvurusunun
+    # bulunmamasidir ve ikisi FARKLI seyler soyler.
+    email_verified: bool = True
     user: UserResponse
 
 

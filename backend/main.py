@@ -1,9 +1,11 @@
+import warnings
 import os
 import uuid
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from app.services import notify
 from app.database import engine, Base, SessionLocal
 from app.routes import (
     auth as auth_router,
@@ -64,6 +66,19 @@ def read_root():
 # Seed database with initial data on startup if empty
 @app.on_event("startup")
 def seed_db():
+    # GELISTIRME BAYRAKLARI ACIKSA YUKSEK SESLE SOYLE.
+    #
+    # `DEV_EXPOSE_EMAIL_TOKEN` dogrulama jetonunu API yanitinda gosteriyor -
+    # yani "bu kutunun sahibi misin" sorusunu kendi kendine cevaplatiyor.
+    # Uretimde acik kalmasi, e-posta dogrulamayi tamamen anlamsiz kilar.
+    if notify.jeton_yanitta_gorunsun_mu():
+        warnings.warn(
+            "DEV_EXPOSE_EMAIL_TOKEN acik: e-posta dogrulama jetonlari API "
+            "yanitinda gorunuyor. Bu YALNIZCA gelistirme icindir - uretimde "
+            "kapatin (EMAIL_BACKEND=smtp iken zaten calismaz).",
+            RuntimeWarning,
+        )
+
     # Dosya deposunu hazirla (Supabase bucket'i ya da yerel uploads dizini).
     storage.ensure_bucket()
 

@@ -956,31 +956,52 @@ def test_rol_SECMEMIS_token_da_veri_goremiyor(client, db_session, iki_kurum):
 
 # --- Kendi kendine kayit ayricalikli rol veremez -------------------------
 
-@pytest.mark.parametrize("rol", ["ORG_OWNER", "COMPETITION_MANAGER", "EVALUATION_MANAGER"])
-def test_kendi_kaydinda_AYRICALIKLI_rol_alinamiyor(client, rol):
-    """Bu kontrol create_user'da vardi, /register'da YOKTU.
+@pytest.mark.parametrize(
+    "rol", ["ORG_OWNER", "COMPETITION_MANAGER", "EVALUATION_MANAGER", "REFEREE", "COMPETITOR"]
+)
+def test_kendi_kaydi_HICBIR_ROL_vermiyor(client, db_session, rol):
+    """Kara liste degil BEYAZ LISTE - aslinda hic liste yok, rol YOK.
 
-    Kayit acildiginda (SELF_REGISTRATION=1 - conftest testler icin aciyor)
-    herhangi biri govdeye `roles: ["ORG_OWNER"]` yazip varsayilan kurumun
-    sorumlusu olabiliyordu: uye rehberini okur, kendine ve baskalarina rol
-    dagitirdi. Kayit ucunun gerekcesi yalnizca kendi kendine REFEREE almayi
-    dusunmustu; ayni listede ORG_OWNER'in da durdugu gozden kacmisti.
+    Once yalnizca AYRICALIKLI_ROLLER engelleniyordu ve bu YETMIYORDU:
+    `REFEREE` o listede degil, yani kendine hakem rolu veren biri
+    /api/reports/lookup ile kurumun BUTUN basvuru kunyelerini okuyabilirdi.
+    Ustelik kara liste, ROLLER'a yeni bir rol eklendiginde SESSIZCE acilir.
+
+    Rol artik yalnizca iki yolla geliyor: kurum sorumlusu verir, ya da
+    DOGRULANMIS e-posta bir bekleyen takim uyeligiyle eslesir.
     """
+    from app import models
+
+    eposta = f"tirmanan.{rol.lower()}@test.org"
     r = client.post(
         "/api/auth/register",
-        json={"email": f"tirmanan.{rol.lower()}@test.org", "password": "parola123", "roles": [rol]},
+        json={"email": eposta, "password": "parola1234", "roles": [rol]},
     )
-    assert r.status_code == 403, f"{rol} kendi kendine alindi (HTTP {r.status_code})"
+    assert r.status_code == 202, r.text[:200]
+
+    kullanici = (
+        db_session.query(models.User).filter(models.User.email == eposta).first()
+    )
+    assert kullanici.role_list == [], f"{rol} kendi kendine alindi"
+    assert kullanici.roles_in("org-t3") == []
 
 
-def test_kendi_kaydinda_SIRADAN_rol_hala_alinabiliyor(client):
-    """Kilit fazla siki olmamali: kayit acikken yarismaci/hakem kaydi
-    calismaya devam etmeli."""
-    r = client.post(
+def test_kendi_kaydi_HICBIR_KURUMA_yazmiyor(client, db_session):
+    """Onceden varsayilan kuruma yaziliyordu, yani "kayit formu = T3 Vakfi
+    uyeligi" demekti - kendi kendine kayit, kurum sinirini asmanin yeni bir
+    yolu olurdu."""
+    from app import models
+
+    client.post(
         "/api/auth/register",
-        json={"email": "siradan@test.org", "password": "parola123", "roles": ["COMPETITOR"]},
+        json={"email": "kurumsuz@test.org", "password": "parola1234"},
     )
-    assert r.status_code == 201, r.text[:200]
+    kullanici = (
+        db_session.query(models.User).filter(models.User.email == "kurumsuz@test.org").first()
+    )
+    assert db_session.query(models.UserRole).filter(
+        models.UserRole.user_id == kullanici.id
+    ).count() == 0
 
 
 # --- Mevcut hesabin GERCEK ADI sizmiyor ---------------------------------

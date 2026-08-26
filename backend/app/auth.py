@@ -81,12 +81,30 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         token_data = schemas.TokenData(
             email=email, role=payload.get("role"), organization_id=payload.get("org")
         )
+        token_epoch = payload.get("epoch", 0)
     except jwt.PyJWTError:
         raise credentials_exception
 
     user = db.query(models.User).filter(models.User.email == token_data.email).first()
     if user is None:
         raise credentials_exception
+
+    # OTURUM DONEMI. Sifre degisince/sifirlaninca `token_epoch` artiyor ve o
+    # ana kadar imzalanmis TUM tokenlar oluyor.
+    #
+    # NEDEN GEREKLI: rol ve kurum veri tabanina karsi dogrulaniyordu ama
+    # SIFRE dogrulanmiyordu - yani calinmis bir token, kurban sifresini
+    # sifirladiktan SONRA da bir saat daha calisiyordu. Bu, sifre
+    # sifirlamanin tek amacini ("hesabi geri al") ortadan kaldiriyordu.
+    #
+    # 403 DEGIL 401: bu bir yetki sorunu degil KIMLIK sorunu - istemcinin
+    # yapmasi gereken sey tekrar giris yapmak.
+    if int(token_epoch or 0) != int(user.token_epoch or 0):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Oturumunuz sonlandirildi. Lutfen tekrar giris yapin.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     aktif_rol = token_data.role
     aktif_kurum = token_data.organization_id
