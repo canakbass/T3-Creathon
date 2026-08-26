@@ -17,8 +17,19 @@ besleniyor. Testler de bu yuzden dogrudan veri tabanina yaziyor.
 
 import io
 import uuid
+from pathlib import Path
 
 import pytest
+
+# Gercek bir TEKNOFEST finalist raporu. Sahte "%PDF-1.4 Mock" baytlariyla
+# benzerlik modulu daha en basta "PDF okunamadi" dalina giriyor ve
+# karsilastirma HIC yapilmiyor - o durumda kimlik sizintisi testi yanlis
+# sebeple gecerdi.
+GERCEK_RAPOR = (
+    Path(__file__).resolve().parents[2]
+    / "ai-doc-analysis" / "sample_reports" / "havacilikta_yz_ktr" / "reports"
+    / "KTR_00_YXpGnt7IevOLKmM75xNlXyQlgHmz2bTM.pdf"
+)
 
 
 def _kaydol_ve_giris(client, email, roller, sifre="password"):
@@ -428,3 +439,75 @@ def test_ayni_eposta_iki_kez_acilamaz(client, sahne):
     ikinci = client.post("/api/auth/users", json=govde, headers=sahne["yonetici"])
     assert ikinci.status_code == 400
     assert "zaten kayitli" in ikinci.json()["detail"]
+
+
+# --- Benzerlik bulgularinda kimlik sizintisi -------------------------------
+
+@pytest.mark.skipif(not GERCEK_RAPOR.exists(), reason="referans KTR raporu bulunamadi")
+def test_yarismaci_baska_basvurunun_KIMLIGINI_gormuyor(client, sahne):
+    """OLCULEN SIZINTI: benzerlik bulgusu karsilastirilan raporun KIMLIGINI
+    metne basiyordu.
+
+    ai-scoring/similarity.py karsilastirilan dosyanin ADINI kullaniyor; dosya
+    adi da RPT-2026-XXXXXX.pdf, yani rapor kimliginin ta kendisi. Bulgu
+    metni "RPT-2026-06BBC8.pdf: %100.0 birebir ortusme" seklinde kaydediliyor
+    ve bu bulgu YARISMACIYA da gidiyor - kendi raporunun analizinde BASKA BIR
+    TAKIMIN basvuru kimligini okuyor. Canli sistemde dogrulandi.
+
+    Hakem icin bu bilgi GEREKLI (intihal suphesini takip etmeli), o yuzden
+    yalnizca COMPETITOR icin maskeleniyor. Ortusme YUZDESI duruyor:
+    yarismacinin "raporum baska bir basvuruyla ortusuyor" bilgisini gormesi
+    dogru, HANGI basvuru oldugunu bilmesi degil.
+    """
+    def _yukle(ad, takim):
+        with open(GERCEK_RAPOR, "rb") as f:
+            r = client.post(
+                "/api/reports/upload",
+                data={
+                    "project_name": ad,
+                    "competition_id": sahne["yar_id"],
+                    "team_id": takim,
+                },
+                files={"file": (f"{ad}.pdf", f, "application/pdf")},
+                headers=sahne["yonetici"],
+            )
+        assert r.status_code == 201, r.text[:200]
+        return r.json()["id"]
+
+    _yukle("Ilk Basvuru", "takim-a")
+    kopya_id = _yukle("Kopya Basvuru", "takim-b")
+
+    # rakip@ takim-b uyesi -> kendi raporunu goruyor
+    yarismaci_gorunum = client.get(
+        f"/api/reports/{kopya_id}", headers=sahne["rakip"]
+    ).json()["ai_analysis"]["results"]["similarity"]
+    assert not any(
+        "RPT-" in b for b in yarismaci_gorunum["findings"]
+    ), f"yarismaci baska basvurunun kimligini gordu: {yarismaci_gorunum['findings']}"
+
+    # Yonetici/hakem icin kimlik DURMALI - aksi halde intihal takip edilemez.
+    yonetici_gorunum = client.get(
+        f"/api/reports/{kopya_id}", headers=sahne["yonetici"]
+    ).json()["ai_analysis"]["results"]["similarity"]
+    assert any(
+        "RPT-" in b for b in yonetici_gorunum["findings"]
+    ), "hakem/yonetici icin de maskelenmis - intihal takip edilemez"
+
+
+def test_reanalyze_yetki_kapisindan_geciyor(client, sahne):
+    """REGRESYON: reanalyze raporu DOGRUDAN kimlikle cekiyordu.
+
+    Tek kontrol RoleChecker'di - yani "rolun var mi", "bu rapor senin mi"
+    degil. Diger sekiz uc noktanin hepsi _rapor_getir_yetkiliyse kapisindan
+    geciyor; tek istisna birakmak, kurum kapsami eklendiginde SESSIZ bir
+    yazma deligi olurdu (baska kurumun AiAnalysis kaydini siler ve yanitla
+    takim adini sizdirirdi).
+    """
+    # Yarismaci hicbir kosulda reanalyze edememeli.
+    r = client.post(f"/api/reports/{sahne['rapor_id']}/reanalyze", headers=sahne["kaptan"])
+    assert r.status_code == 403, f"yarismaci reanalyze cagirabildi (HTTP {r.status_code})"
+
+    # Olmayan rapor 404 - kapinin ilk adimi.
+    assert client.post(
+        "/api/reports/RPT-YOK/reanalyze", headers=sahne["yonetici"]
+    ).status_code == 404

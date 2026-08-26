@@ -1,5 +1,6 @@
 import contextlib
 import json
+import re
 import os
 import shutil
 import uuid
@@ -30,7 +31,29 @@ def _dosyayi_diske_yaz(upload: UploadFile, hedef_yol: str) -> None:
     with open(hedef_yol, "wb") as buffer:
         shutil.copyfileobj(upload.file, buffer)
 
-def _attach_analysis_results(report: models.Report) -> models.Report:
+# Rapor kimligi deseni (RPT-2026-A1B2C3), istege bagli ".pdf" uzantisiyla.
+_RAPOR_KIMLIGI = re.compile(r"\bRPT-\d{4}-[0-9A-Fa-f]{6,}(?:\.\w+)?")
+
+
+def _benzerlik_bulgularini_maskele(bulgular):
+    """Baska raporlarin KIMLIGINI yarismaciya gostermez.
+
+    OLCULEN SIZINTI: benzerlik bulgusu "RPT-2026-06BBC8.pdf: %100.0 birebir
+    ortusme" seklinde YAZILIYOR - yani karsilastirilan raporun kimligini
+    metne basiyor (ai-scoring/similarity.py dosya adini kullaniyor, dosya adi
+    da RPT-2026-XXXXXX.pdf). Bu bulgu yarismaciya da gidiyor: kendi
+    raporunun analizinde BASKA BIR TAKIMIN basvuru kimligini okuyor.
+    Dogrulandi: Zebot yarismacisi Glieser'in rapor kimligini gordu.
+
+    Hakem icin bu bilgi GEREKLI (intihal suphesini takip etmesi lazim), o
+    yuzden yalnizca COMPETITOR icin maskeleniyor. Ortusme YUZDESI duruyor -
+    yarismacinin "raporum baska bir basvuruyla ortusuyor" bilgisini gormesi
+    dogru; HANGI basvuru oldugunu bilmesi degil.
+    """
+    return [_RAPOR_KIMLIGI.sub("başka bir başvuru", b) for b in bulgular]
+
+
+def _attach_analysis_results(report: models.Report, user=None) -> models.Report:
     """AiAnalysis kaydinin duz kolonlarini, API'nin dondugu ic ice `results`
     sozlugune cevirip nesneye ekler.
 
@@ -101,7 +124,12 @@ def _attach_analysis_results(report: models.Report) -> models.Report:
             "similarity": {
                 "score": analysis.similarity_score,
                 "summary": analysis.similarity_summary,
-                "findings": _findings(analysis.similarity_findings),
+                # Yarismaci baska basvurularin KIMLIGINI gormemeli.
+                "findings": (
+                    _benzerlik_bulgularini_maskele(_findings(analysis.similarity_findings))
+                    if getattr(user, "active_role", None) == "COMPETITOR"
+                    else _findings(analysis.similarity_findings)
+                ),
             },
         },
     )
@@ -482,7 +510,7 @@ async def upload_report(
 
     # _attach_analysis_results uzerinden donuyoruz: team_name ve atama alanlari
     # yanitta dolu olsun. Duz `return db_report` bu alanlari bos birakiyordu.
-    return _attach_analysis_results(db_report)
+    return _attach_analysis_results(db_report, current_user)
 
 
 def _rol_yoksa_reddet(user: models.User) -> str:
@@ -653,7 +681,7 @@ def list_reports(
     # ai_analysis.results her yanit oncesi uretilmek zorunda (bkz.
     # _attach_analysis_results). Bu eksik oldugu icin endpoint, analiz
     # edilmis ilk rapordan sonra HTTP 500 veriyordu.
-    return [_attach_analysis_results(r) for r in query.all()]
+    return [_attach_analysis_results(r, current_user) for r in query.all()]
 
 
 # ARAMA UC NOKTASI - /{report_id}'DEN ONCE TANIMLANMALI.
@@ -797,7 +825,7 @@ def get_report(
 
     # ai_analysis.results semada zorunlu ama veri tabaninda kolon degil -
     # yanit oncesi duz kolonlardan uretiliyor (bkz. _attach_analysis_results).
-    return _attach_analysis_results(report)
+    return _attach_analysis_results(report, current_user)
 
 
 @router.post("/{report_id}/reanalyze", response_model=schemas.ReportResponse)
@@ -822,9 +850,13 @@ def reanalyze_report(
     yeniden analiz etmek, hakemin uzerinde calistigi puanlari sessizce
     degistirirdi.
     """
-    report = db.query(models.Report).filter(models.Report.id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
+    # YETKI KAPISINDAN GECIYOR. Onceden rapor dogrudan kimlikle cekiliyordu
+    # ve tek kontrol RoleChecker'di - yani "rolun var mi", "bu rapor senin mi"
+    # degil. Bugun zararsiz (yonetici zaten hepsini goruyor) ama diger sekiz
+    # uc noktanin hepsi bu kapidan geciyor; tek istisna birakmak, kurum
+    # kapsami eklendiginde SESSIZ bir yazma deligi olurdu - hem baska kurumun
+    # AiAnalysis kaydini siler hem yanitla takim adini sizdirirdi.
+    report = _rapor_getir_yetkiliyse(report_id, current_user, db)
     if report.status != "error":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -844,7 +876,7 @@ def reanalyze_report(
     db.refresh(report)
 
     background_tasks.add_task(run_background_analysis, report_id, report.file_path, db)
-    return _attach_analysis_results(report)
+    return _attach_analysis_results(report, current_user)
 
 
 @router.get("/{report_id}/file")
