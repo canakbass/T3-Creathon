@@ -73,217 +73,244 @@ function mockUploadFetch(
   return fetchMock;
 }
 
-async function fillProjectName(user: ReturnType<typeof userEvent.setup>, name: string) {
-  await user.type(screen.getByTestId("upload-project-name"), name);
+/** Dosyalari birak ve "Aktar"a bas. */
+async function birakVeAktar(user: ReturnType<typeof userEvent.setup>, files: File[]) {
+  await dropFiles(screen.getByTestId("upload-dropzone"), files);
+  await user.click(await screen.findByTestId("upload-submit"));
 }
 
-describe("ReportUpload", () => {
-  const originalFetch = global.fetch;
 
+
+describe("ReportUpload — takım dosya adından", () => {
+  const originalFetch = global.fetch;
   afterEach(() => {
     global.fetch = originalFetch;
-    jest.useRealTimers();
   });
 
-  it("renders an accessible dropzone with no uploads initially", () => {
-    render(<ReportUpload initialCategories={CATEGORIES} />);
-
-    expect(
-      screen.getByRole("button", { name: /rapor dosyalarını yükleyin/i }),
-    ).toBeInTheDocument();
-    expect(screen.queryByTestId("upload-list")).not.toBeInTheDocument();
-  });
-
-  it("shows a dragging visual state on drag enter and clears it on drop", async () => {
-    render(<ReportUpload initialCategories={CATEGORIES} />);
-    const dropzone = screen.getByTestId("upload-dropzone");
-    const file = makeFile("evaluation-report.pdf", "application/pdf");
-
-    const { fireEvent } = await import("@testing-library/react");
-    const dataTransfer = { files: [file], items: [], types: ["Files"] };
-
-    act(() => {
-      fireEvent.dragEnter(dropzone, { dataTransfer });
-    });
-    expect(dropzone).toHaveAttribute("data-dragging", "true");
-
-    act(() => {
-      fireEvent.drop(dropzone, { dataTransfer });
-    });
-    expect(dropzone).toHaveAttribute("data-dragging", "false");
-  });
-
-  it("posts the file to the backend and reports success once the analysis finishes", async () => {
+  it("dosya bırakılınca TAKIMI GÖSTERİR ama hemen GÖNDERMEZ", async () => {
+    // Çıkarım sezgisel: dosya adındaki bir harf hatası, doğrulamayı geçen
+    // YABANCI birine o takımın tüm sonuçlarını verirdi. Doğrulama "bu
+    // kutunun sahibi misin" sorusunu cevaplar, "bu kişi bu takımda mı"
+    // sorusunu cevaplamaz — onu yalnızca yönetici cevaplayabilir.
     const fetchMock = mockUploadFetch();
-    const onUploadComplete = jest.fn();
-    const user = userEvent.setup();
+    render(<ReportUpload competitionId="COMP-1" />);
 
-    render(
-      <ReportUpload initialCategories={CATEGORIES} onUploadComplete={onUploadComplete} />,
+    await dropFiles(
+      screen.getByTestId("upload-dropzone"),
+      [makeFile("ali@okul.edu.tr_veli@okul.edu.tr.pdf", "application/pdf")],
     );
 
-    await fillProjectName(user, "İHA Nesne Tespiti");
-    await dropFiles(screen.getByTestId("upload-dropzone"), [
-      makeFile("evaluation-report.pdf", "application/pdf"),
+    const satir = screen.getByTestId("upload-item-ali@okul.edu.tr_veli@okul.edu.tr.pdf");
+    expect(satir).toHaveAttribute("data-status", "hazir");
+    expect(
+      screen.getByTestId("upload-emails-ali@okul.edu.tr_veli@okul.edu.tr.pdf"),
+    ).toHaveValue("ali@okul.edu.tr, veli@okul.edu.tr");
+    // Hiçbir yükleme isteği ATILMAMIŞ olmalı.
+    expect(
+      fetchMock.mock.calls.filter(([u]) => String(u).includes("/upload")),
+    ).toHaveLength(0);
+  });
+
+  it("onaylanınca e-postaları GÖNDERİR ve analizi bekler", async () => {
+    const fetchMock = mockUploadFetch();
+    const user = userEvent.setup();
+    render(<ReportUpload competitionId="COMP-1" />);
+
+    await birakVeAktar(user, [
+      makeFile("ali@okul.edu.tr_veli@okul.edu.tr.pdf", "application/pdf"),
     ]);
 
-    const item = screen.getByTestId("upload-item-evaluation-report.pdf");
-    await waitFor(() => expect(item).toHaveAttribute("data-status", "success"));
+    const satir = screen.getByTestId("upload-item-ali@okul.edu.tr_veli@okul.edu.tr.pdf");
+    await waitFor(() => expect(satir).toHaveAttribute("data-status", "success"));
 
-    expect(onUploadComplete).toHaveBeenCalledWith("evaluation-report.pdf");
-    expect(screen.getByText(/analiz tamamlandı/i)).toBeInTheDocument();
-    // Backend'in dondurdugu rapor kimligi gosteriliyor - hakem bunu arayacak.
-    expect(screen.getByText(/RPT-2026-ABC123/)).toBeInTheDocument();
+    const cagri = fetchMock.mock.calls.find(([u]) => String(u).includes("/upload"));
+    const govde = cagri?.[1]?.body as FormData;
+    expect(govde.get("member_emails")).toBe("ali@okul.edu.tr,veli@okul.edu.tr");
+    // Takım kimliği ARTIK GÖNDERİLMİYOR — yöneticinin elinde olmayan bilgi.
+    expect(govde.get("team_id")).toBeNull();
+  });
 
-    // Govde multipart ve backend'in zorunlu tuttugu alanlari tasimali.
-    const uploadCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).includes("/api/reports/upload"),
+  it("dosya adında e-posta yoksa AKTARMAYI ENGELLER ve ne yapılacağını söyler", async () => {
+    const fetchMock = mockUploadFetch();
+    render(<ReportUpload competitionId="COMP-1" />);
+
+    await dropFiles(screen.getByTestId("upload-dropzone"), [
+      makeFile("matematik_rapor.pdf", "application/pdf"),
+    ]);
+
+    expect(screen.getByTestId("upload-issue-matematik_rapor.pdf")).toHaveTextContent(
+      /adresler/i,
     );
-    expect(uploadCall).toBeDefined();
-    const body = uploadCall?.[1]?.body as FormData;
-    expect(body.get("project_name")).toBe("İHA Nesne Tespiti");
-    expect(body.get("category_id")).toBe("cat-2");
-    expect(body.get("file")).toBeInstanceOf(File);
+    expect(screen.getByTestId("upload-submit")).toBeDisabled();
+    expect(
+      fetchMock.mock.calls.filter(([u]) => String(u).includes("/upload")),
+    ).toHaveLength(0);
   });
 
-  it("refuses to upload before a project name is entered", async () => {
-    mockUploadFetch();
-    render(<ReportUpload initialCategories={CATEGORIES} />);
+  it("e-posta ELLE yazılınca aktarılabilir hale gelir", async () => {
+    const fetchMock = mockUploadFetch();
+    const user = userEvent.setup();
+    render(<ReportUpload competitionId="COMP-1" />);
 
     await dropFiles(screen.getByTestId("upload-dropzone"), [
-      makeFile("evaluation-report.pdf", "application/pdf"),
+      makeFile("matematik_rapor.pdf", "application/pdf"),
     ]);
+    await user.type(
+      screen.getByTestId("upload-emails-matematik_rapor.pdf"),
+      "ogrenci@okul.edu.tr",
+    );
+    await user.click(screen.getByTestId("upload-submit"));
 
-    const item = screen.getByTestId("upload-item-evaluation-report.pdf");
-    expect(item).toHaveAttribute("data-status", "error");
-    // Backend project_name'i zorunlu tutuyor; sunucuya gitmeden uyariyoruz.
-    expect(item).toHaveTextContent(/önce proje adını girin/i);
+    await waitFor(() =>
+      expect(screen.getByTestId("upload-item-matematik_rapor.pdf")).toHaveAttribute(
+        "data-status",
+        "success",
+      ),
+    );
+    const cagri = fetchMock.mock.calls.find(([u]) => String(u).includes("/upload"));
+    expect((cagri?.[1]?.body as FormData).get("member_emails")).toBe(
+      "ogrenci@okul.edu.tr",
+    );
   });
 
-  it("surfaces the backend error message when the upload is rejected", async () => {
-    mockUploadFetch({ uploadStatus: 404 });
+  it("proje adı dosya adından DOLDURULUYOR ve düzenlenebiliyor", async () => {
+    const fetchMock = mockUploadFetch();
     const user = userEvent.setup();
-    render(<ReportUpload initialCategories={CATEGORIES} />);
+    render(<ReportUpload competitionId="COMP-1" />);
 
-    await fillProjectName(user, "Geçersiz Kategori Testi");
     await dropFiles(screen.getByTestId("upload-dropzone"), [
-      makeFile("evaluation-report.pdf", "application/pdf"),
+      makeFile("Yapay Zeka Projesi ali@x.com.pdf", "application/pdf"),
     ]);
+    const alan = screen.getByTestId("upload-project-Yapay Zeka Projesi ali@x.com.pdf");
+    expect(alan).toHaveValue("Yapay Zeka Projesi");
 
-    const item = screen.getByTestId("upload-item-evaluation-report.pdf");
-    await waitFor(() => expect(item).toHaveAttribute("data-status", "error"));
-    // Sunucunun CÜMLESİ gösterilmeli, genel bir "kayıt bulunamadı" değil:
-    // hangi kaydın eksik olduğunu yalnızca sunucu biliyor ve yöneticinin
-    // düzeltmesi gereken şey o.
-    expect(item).toHaveTextContent(/kategori bulunamadi/i);
+    await user.clear(alan);
+    await user.type(alan, "Elle Yazılan Ad");
+    await user.click(screen.getByTestId("upload-submit"));
+
+    await waitFor(() => {
+      const cagri = fetchMock.mock.calls.find(([u]) => String(u).includes("/upload"));
+      expect((cagri?.[1]?.body as FormData).get("project_name")).toBe("Elle Yazılan Ad");
+    });
   });
 
-  it("accepts Word documents as valid uploads", async () => {
+  it("belirsiz yerel kısımda UYARI gösteriyor", async () => {
+    // `YAPAY_ZEKA_ali@x.com` içinde `ZEKA_ali` mi yerel kısım, `ali` mi?
+    // Regex karara bağlayamaz; sessizce geçmek yöneticinin YANLIŞ bir takımı
+    // onaylaması demekti.
+    mockUploadFetch();
+    render(<ReportUpload competitionId="COMP-1" />);
+
+    await dropFiles(screen.getByTestId("upload-dropzone"), [
+      makeFile("YAPAY ZEKA_ali@x.com.pdf", "application/pdf"),
+    ]);
+
+    expect(screen.getByTestId("upload-note-YAPAY ZEKA_ali@x.com.pdf")).toHaveTextContent(
+      /düzeltin/i,
+    );
+  });
+
+  it("geçersiz e-posta yazılırsa aktarım kapalı kalıyor", async () => {
     mockUploadFetch();
     const user = userEvent.setup();
-    render(<ReportUpload initialCategories={CATEGORIES} />);
+    render(<ReportUpload competitionId="COMP-1" />);
 
-    await fillProjectName(user, "Word Raporu");
+    await dropFiles(screen.getByTestId("upload-dropzone"), [
+      makeFile("matematik_rapor.pdf", "application/pdf"),
+    ]);
+    await user.type(
+      screen.getByTestId("upload-emails-matematik_rapor.pdf"),
+      "bozukadres",
+    );
+
+    expect(screen.getByTestId("upload-issue-matematik_rapor.pdf")).toHaveTextContent(
+      /geçerli bir e-posta değil/i,
+    );
+    expect(screen.getByTestId("upload-submit")).toBeDisabled();
+  });
+
+  it("desteklenmeyen dosya türünü reddediyor", async () => {
+    mockUploadFetch();
+    render(<ReportUpload competitionId="COMP-1" />);
+
+    await dropFiles(screen.getByTestId("upload-dropzone"), [
+      makeFile("sunum.pptx", "application/vnd.ms-powerpoint"),
+    ]);
+
+    const satir = screen.getByTestId("upload-item-sunum.pptx");
+    expect(satir).toHaveAttribute("data-status", "error");
+    expect(satir).toHaveTextContent(/desteklenmeyen dosya türü/i);
+  });
+
+  it("Word belgelerini kabul ediyor", async () => {
+    mockUploadFetch();
+    render(<ReportUpload competitionId="COMP-1" />);
+
     await dropFiles(screen.getByTestId("upload-dropzone"), [
       makeFile(
-        "report.docx",
+        "ali@x.com.docx",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       ),
     ]);
 
-    const item = screen.getByTestId("upload-item-report.docx");
-    // Dosya turu kabul edildi: hata DEGIL, yukleme/analiz akisina girdi.
-    expect(item).not.toHaveAttribute("data-status", "error");
-    await waitFor(() => expect(item).toHaveAttribute("data-status", "success"));
+    expect(screen.getByTestId("upload-item-ali@x.com.docx")).toHaveAttribute(
+      "data-status",
+      "hazir",
+    );
   });
 
-  it("shows an error state for unsupported file types", async () => {
-    mockUploadFetch();
-    render(<ReportUpload initialCategories={CATEGORIES} />);
+  it("analiz status=error dönerse BAŞARI DEĞİL hata gösterir", async () => {
+    // Dönen değere bakmasaydık analizi çökmüş bir rapor başarılı görünür,
+    // kimse yeniden yüklemeyi düşünmez ve hakem hiç analizi olmayan bir
+    // raporla karşılaşırdı.
+    mockUploadFetch({ reportStatus: "error" });
+    const user = userEvent.setup();
+    render(<ReportUpload competitionId="COMP-1" />);
 
-    await dropFiles(screen.getByTestId("upload-dropzone"), [
-      makeFile("notes.txt", "text/plain"),
-    ]);
+    await birakVeAktar(user, [makeFile("ali@x.com.pdf", "application/pdf")]);
 
-    const item = screen.getByTestId("upload-item-notes.txt");
-    expect(item).toHaveAttribute("data-status", "error");
-    expect(item).toHaveTextContent(/desteklenmeyen dosya türü/i);
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    const satir = screen.getByTestId("upload-item-ali@x.com.pdf");
+    await waitFor(() => expect(satir).toHaveAttribute("data-status", "error"));
+    expect(satir).toHaveTextContent(/analizi tamamlanamadı/i);
   });
 
-  it("removes an upload item when its remove button is clicked", async () => {
+  it("backend hatasını olduğu gibi gösteriyor", async () => {
+    mockUploadFetch({ uploadStatus: 404 });
+    const user = userEvent.setup();
+    render(<ReportUpload competitionId="COMP-1" />);
+
+    await birakVeAktar(user, [makeFile("ali@x.com.pdf", "application/pdf")]);
+
+    const satir = screen.getByTestId("upload-item-ali@x.com.pdf");
+    await waitFor(() => expect(satir).toHaveAttribute("data-status", "error"));
+    expect(satir).toHaveTextContent(/kategori bulunamadi/i);
+  });
+
+  it("satırı listeden çıkarabiliyor", async () => {
     mockUploadFetch();
     const user = userEvent.setup();
-    render(<ReportUpload initialCategories={CATEGORIES} />);
+    render(<ReportUpload competitionId="COMP-1" />);
 
     await dropFiles(screen.getByTestId("upload-dropzone"), [
-      makeFile("notes.txt", "text/plain"),
+      makeFile("ali@x.com.pdf", "application/pdf"),
     ]);
-    expect(screen.getByTestId("upload-item-notes.txt")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: /ali@x.com.pdf dosyasını listeden çıkar/i }),
+    );
 
-    await user.click(screen.getByRole("button", { name: /kaldır: notes\.txt/i }));
-    expect(screen.queryByTestId("upload-item-notes.txt")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("upload-item-ali@x.com.pdf")).not.toBeInTheDocument();
   });
 
-  it("opens the file picker via keyboard interaction on the dropzone", async () => {
+  it("klavyeyle dosya seçici açılıyor", async () => {
+    mockUploadFetch();
     const user = userEvent.setup();
-    render(<ReportUpload initialCategories={CATEGORIES} />);
-    const dropzone = screen.getByTestId("upload-dropzone");
-    const input = screen.getByTestId("upload-file-input") as HTMLInputElement;
-    const clickSpy = jest.spyOn(input, "click");
+    render(<ReportUpload competitionId="COMP-1" />);
 
-    dropzone.focus();
+    const girdi = screen.getByTestId("upload-input") as HTMLInputElement;
+    const tikla = jest.spyOn(girdi, "click").mockImplementation(() => {});
+    screen.getByTestId("upload-dropzone").focus();
     await user.keyboard("{Enter}");
 
-    expect(clickSpy).toHaveBeenCalled();
-  });
-
-  it("loads categories from the API when they are not supplied", async () => {
-    mockUploadFetch();
-    render(<ReportUpload />);
-
-    const select = screen.getByTestId("upload-category");
-    await waitFor(() => {
-      expect(select).toHaveTextContent("Yapay Zeka ve Makine Öğrenmesi");
-    });
-    expect(select).toHaveValue("cat-2");
-  });
-});
-
-describe("ReportUpload — analiz çöktüğünde", () => {
-  const originalFetch = global.fetch;
-  afterEach(() => {
-    global.fetch = originalFetch;
-  });
-
-  /**
-   * REGRESYON: analizi ÇÖKMÜŞ bir rapor yeşil "Analiz tamamlandı" gösteriyordu.
-   *
-   * `pollUntilAnalyzed` "pending" DIŞINDAKİ ilk durumda dönüyor ve "error"
-   * da bir bitiş durumu. Çağıran taraf dönen değere hiç bakmıyor, koşulsuz
-   * `status: "success"` yazıyordu. Sonuç: yükleyen kişi her şeyin yolunda
-   * olduğunu sanıyor, kimse yeniden yüklemeyi düşünmüyor ve hakem hiç
-   * analizi olmayan bir raporla karşılaşıyor.
-   */
-  it("analiz status=error dönerse başarı değil hata gösterir", async () => {
-    mockUploadFetch({ reportStatus: "error" });
-    const onUploadComplete = jest.fn();
-    const user = userEvent.setup();
-
-    render(
-      <ReportUpload initialCategories={CATEGORIES} onUploadComplete={onUploadComplete} />,
-    );
-    await fillProjectName(user, "İHA Nesne Tespiti");
-    await dropFiles(
-      screen.getByTestId("upload-dropzone"),
-      [makeFile("rapor.pdf", "application/pdf")],
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId("upload-list")).toHaveTextContent(/analizi tamamlanamadı/i);
-    });
-    expect(screen.getByTestId("upload-list")).not.toHaveTextContent(/analiz tamamlandı/i);
-    // Basarili sayilmadigi icin "yukleme bitti" geri cagrimi da tetiklenmemeli.
-    expect(onUploadComplete).not.toHaveBeenCalled();
+    expect(tikla).toHaveBeenCalled();
   });
 });

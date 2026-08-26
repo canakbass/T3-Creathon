@@ -408,12 +408,21 @@ export async function lookupReports(
 }
 
 export interface UploadReportInput {
-  projectName: string;
+  /** Boş bırakılırsa sunucu dosya adından türetiyor. */
+  projectName?: string;
   /**
-   * Raporun sahibi takım. Yönetici aktarımında ZORUNLU — aksi halde rapor
-   * sahipsiz kalır ve sonucunu hiçbir yarışmacı göremez.
+   * Raporun sahibi takım — MEVCUT bir takıma doğrudan bağlamak için.
+   * Genelde gerekmiyor: takım `memberEmails`ten (ya da dosya adından)
+   * türetiliyor. Yöneticinin elinde olan bilgi takım kimliği değil,
+   * teslim eden kişilerin e-postalarıdır.
    */
   teamId?: string | null;
+  /**
+   * Takım üyelerinin e-postaları. Rapor MUTLAKA bir takıma bağlanır:
+   * sahipsiz bir rapor analiz edilir, hakem karar verir ve sonucunu hiçbir
+   * yarışmacı göremez.
+   */
+  memberEmails?: string[];
   /** Yarışma verilirse kategori ondan alınır; ayrıca seçmeye gerek yok. */
   competitionId?: string;
   categoryId?: string;
@@ -426,10 +435,17 @@ export interface UploadReportInput {
  */
 export async function uploadReport(input: UploadReportInput): Promise<EvaluationReport> {
   const form = new FormData();
-  form.append("project_name", input.projectName);
+  // Proje adı ARTIK ZORUNLU DEĞİL: verilmezse sunucu dosya adından türetiyor.
+  if (input.projectName?.trim()) form.append("project_name", input.projectName.trim());
   if (input.competitionId) form.append("competition_id", input.competitionId);
   if (input.categoryId) form.append("category_id", input.categoryId);
   if (input.teamId) form.append("team_id", input.teamId);
+  // TAKIM ÜYELERİ. Yönetici ekranda onayladığı adresler; boş bırakılırsa
+  // sunucu dosya adından kendisi çıkarıyor. Ekranda gösterileni göndermek,
+  // "gördüğüm şey kaydedilen şey" garantisini veriyor.
+  if (input.memberEmails?.length) {
+    form.append("member_emails", input.memberEmails.join(","));
+  }
   form.append("file", input.file);
 
   const wire = await apiFetch<WireReport>("/api/reports/upload", {
