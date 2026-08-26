@@ -40,7 +40,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from .. import models, schemas, auth
+from .. import models, schemas, auth, tenancy
 from ..services import ai
 
 router = APIRouter(prefix="/api/competitions", tags=["Competitions"])
@@ -54,18 +54,58 @@ ASAMALAR = ("draft", "open", "closed", "evaluating", "completed")
 YUKLEMEYE_ACIK = ("open",)
 
 
-# Kullanici-kurum uyeligi devreye girene kadar yeni yarismalarin baglanacagi
-# kurum. Uyelik geldiginde burasi olusturanin AKTIF kurumuyla degisecek.
+# Aktif kurumu OLMAYAN bir token yarisma olusturursa baglanacagi kurum.
+# Gecis donemi icin: kurum uyeligi eklenmeden once acilmis oturumlar hala
+# gecerli olabiliyor.
 VARSAYILAN_KURUM_SLUG = "t3-vakfi"
 
 
-def _varsayilan_kurum_id(db: Session):
-    kurum = (
+def _kurum_id(db: Session, current_user):
+    """Yeni yarismanin sahibi kurum.
+
+    Kullanicinin "yonetici olarak yarisma baslattim ama kimin yarismasi bu
+    tam olarak??" sorusunun cevabi: OLUSTURANIN AKTIF KURUMUNUN.
+
+    NEDEN "ilk kurum" DEGIL: ilk denemede `order_by(id).first()` yazmistim
+    ve alfabetik sira yuzunden yarisma "org-cbu"ya baglandi - sessizce
+    YANLIS kurum. Varsayilan tahmin edilmemeli.
+    """
+    kurum = tenancy.aktif_kurum(current_user)
+    if kurum:
+        return kurum
+    kayit = (
         db.query(models.Organization)
         .filter(models.Organization.slug == VARSAYILAN_KURUM_SLUG)
         .first()
     )
-    return kurum.id if kurum else None
+    return kayit.id if kayit else None
+
+
+def _varsayilan_kategori(db: Session, current_user) -> models.Category:
+    """Kurumun ilk yarismasi icin "Genel" kategorisini acar.
+
+    NEDEN OTOMATIK: `Competition.category_id` NOT NULL - eski bir kalinti.
+    Kategori artik yarismanin uzerinde SERBEST METIN olarak (`category_label`)
+    duruyor; bu tablo yalnizca AI'nin "rapor beyan edilen alana ait mi"
+    kontrolu icin ayakta. Kullanicinin dedigi gibi ("katagori mevzusunu
+    anlamadim, neden kategoriler var ki") bu ayri bir kavram olarak yoneticiye
+    gorunmemeli.
+
+    Kurum kapsami gelince yeni bir kurumun HIC kategorisi olmuyor ve ilk
+    yarisma "Sistemde hic kategori tanimli degil" ile reddediliyordu - yani
+    her yeni kurum, anlamini bilmedigi bir kaydi elle acmadan ise
+    baslayamiyordu. Kalinti bir zorunluluk kullaniciya odev olarak
+    cikmamali.
+    """
+    kategori = models.Category(
+        id=str(uuid.uuid4()),
+        name="Genel",
+        description="Kurumun varsayilan konu alani.",
+        organization_id=tenancy.aktif_kurum(current_user),
+    )
+    db.add(kategori)
+    db.flush()
+    return kategori
 
 
 def _json_yukle(deger, varsayilan):
@@ -121,9 +161,10 @@ def list_competitions(
     Yarismaci ve hakem, HAZIRLIK asamasindaki (draft) yarismalari gormez -
     yonetici hazirligini bitirmeden duyurulmus gibi gorunmemeli.
     """
-    q = db.query(models.Competition)
-    aktif = getattr(current_user, "active_role", None)
-    if aktif not in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
+    # Kurum filtresi ROL dallarindan ONCE: yabanci kurumun yarismasinda
+    # "bu kisi yonetici mi" sorusu hic sorulmamali.
+    q = tenancy.kurum_filtresi(db.query(models.Competition), models.Competition, current_user)
+    if not tenancy.yonetici_mi(current_user):
         q = q.filter(models.Competition.status != "draft")
     return [_yanit(y) for y in q.order_by(models.Competition.created_at.desc()).all()]
 
@@ -143,15 +184,20 @@ def create_competition(
         kategori = db.query(models.Category).filter(
             models.Category.id == govde.category_id
         ).first()
+        if kategori and not tenancy.ayni_kurum_mu(kategori, current_user):
+            kategori = None  # yabanci kurumun kategorisi YOK sayilir
         if not kategori:
             raise HTTPException(status_code=404, detail="Kategori bulunamadi.")
     else:
-        kategori = db.query(models.Category).order_by(models.Category.id).first()
+        # Ortak (kurumu bos) kategoriler once: yeni bir kurum, baska bir
+        # kurumun ozel kategorisine sessizce baglanmasin.
+        kategori = (
+            tenancy.kurum_filtresi(db.query(models.Category), models.Category, current_user)
+            .order_by(models.Category.organization_id.isnot(None), models.Category.id)
+            .first()
+        )
         if not kategori:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Sistemde hic kategori tanimli degil; category_id verin.",
-            )
+            kategori = _varsayilan_kategori(db, current_user)
 
     y = models.Competition(
         id=f"COMP-{str(uuid.uuid4())[:8].upper()}",
@@ -160,16 +206,9 @@ def create_competition(
         category_id=kategori.id,
         category_label=govde.category_label,
         created_by_id=current_user.id,
-        # Kurum bagi: su an olusturanin kurumundan TURETILEMIYOR cunku
-        # kullanici-kurum uyeligi henuz yok. Gecici olarak ACIKCA ADLANDIRILMIS
-        # varsayilan kuruma baglaniyor.
-        #
-        # NEDEN "ilk kurum" DEGIL: ilk denemede `order_by(id).first()`
-        # yazmistim ve alfabetik sira yuzunden yarisma "org-cbu"ya baglandi -
-        # sessizce YANLIS kurum. Varsayilan tahmin edilmemeli, adiyla
-        # secilmeli; bulunamazsa bos birakilmali (yanlis kuruma baglamaktansa
-        # bagsiz birakmak yeglenir).
-        organization_id=_varsayilan_kurum_id(db),
+        # Sahiplik KISIYE degil KURUMA ait: `created_by_id` yalnizca "kim
+        # olusturdu"yu soyluyor ve o kisi kurumdan ayrilabilir.
+        organization_id=_kurum_id(db, current_user),
         status="draft",
         submission_deadline=govde.submission_deadline,
     )
@@ -185,12 +224,7 @@ def get_competition(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    y = db.query(models.Competition).filter(models.Competition.id == competition_id).first()
-    if not y:
-        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
-    aktif = getattr(current_user, "active_role", None)
-    if y.status == "draft" and aktif not in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
-        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+    y = tenancy.yarisma_getir_yetkiliyse(competition_id, current_user, db)
     return _yanit(y)
 
 
@@ -276,9 +310,7 @@ def set_template(
     Onceden bu degerler tum sistem icin docs/mvp-rules.json'da sabitti;
     artik yarisma basina ayarlanabiliyor.
     """
-    y = db.query(models.Competition).filter(models.Competition.id == competition_id).first()
-    if not y:
-        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+    y = tenancy.yarisma_getir_yetkiliyse(competition_id, current_user, db)
 
     if govde.min_pages is not None and govde.max_pages is not None:
         if govde.min_pages > govde.max_pages:
@@ -319,9 +351,7 @@ def set_criteria(
     aliyor ve hakeme "bu 78 nereden geldi" sorusunun cevabini verebilmek
     icin agirliklarin anlamli bir toplami olmasi gerekiyor.
     """
-    y = db.query(models.Competition).filter(models.Competition.id == competition_id).first()
-    if not y:
-        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+    y = tenancy.yarisma_getir_yetkiliyse(competition_id, current_user, db)
 
     if not govde.criteria:
         raise HTTPException(
@@ -389,9 +419,7 @@ async def extract_template(
     Ayrica bu, sistemin "AI karar vermez, insan karar verir" ilkesiyle de
     tutarli.
     """
-    y = db.query(models.Competition).filter(models.Competition.id == competition_id).first()
-    if not y:
-        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+    y = tenancy.yarisma_getir_yetkiliyse(competition_id, current_user, db)
 
     uzanti = os.path.splitext(file.filename or "")[1].lower()
     if uzanti not in _SABLON_UZANTILARI:
@@ -440,9 +468,7 @@ def set_status(
     kurallar olmadan basvuru acilirsa AI analizi neye gore kontrol
     yapacagini bilemez ve yarismaci bos bir degerlendirme alir.
     """
-    y = db.query(models.Competition).filter(models.Competition.id == competition_id).first()
-    if not y:
-        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+    y = tenancy.yarisma_getir_yetkiliyse(competition_id, current_user, db)
     if govde.status not in ASAMALAR:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from ..database import get_db
-from .. import models, schemas, auth
+from .. import models, schemas, auth, tenancy
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -10,12 +10,22 @@ def get_dashboard_stats(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"]))
 ):
-    total = db.query(models.Report).count()
-    pending = db.query(models.Report).filter(models.Report.status == "pending").count()
-    analyzed = db.query(models.Report).filter(models.Report.status == "analyzed").count()
-    approved = db.query(models.Report).filter(models.Report.status == "approved").count()
-    rejected = db.query(models.Report).filter(models.Report.status == "rejected").count()
-    revise = db.query(models.Report).filter(models.Report.status == "revise").count()
+    # Sayilar KURUMLA sinirli. Toplam sayilar zararsiz gorunuyor ama bir
+    # kurumun kac basvuru aldigi ve kacini reddettigi o kuruma ait bir bilgi;
+    # ustelik sayac, ekleme-cikarma ile baska kurumun hareketlerini takip
+    # etmeye de yarar (bugun 12, yarin 15 -> "3 basvuru geldi").
+    def sayac(durum=None):
+        q = tenancy.kurum_filtresi(db.query(models.Report), models.Report, current_user)
+        if durum:
+            q = q.filter(models.Report.status == durum)
+        return q.count()
+
+    total = sayac()
+    pending = sayac("pending")
+    analyzed = sayac("analyzed")
+    approved = sayac("approved")
+    rejected = sayac("rejected")
+    revise = sayac("revise")
     
     # Completion rate: proportion of reports with final decisions (approved + rejected + revise) over total reports
     completed = approved + rejected + revise

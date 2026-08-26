@@ -360,3 +360,156 @@ def test_benzerlik_havuzu_kurumla_sinirli(client, db_session, iki_kurum):
     assert not any(
         iki_kurum["rapor_id"] in x for x in bulgular
     ), f"baska kurumun rapor kimligi bulgulara sizdi: {bulgular}"
+
+
+# --- Yarisma: yabanci kurumun kurallarini DEGISTIREMEZ ------------------
+
+def test_baska_kurumun_yarismasini_goremiyor(client, iki_kurum):
+    y, b = iki_kurum["yar_id"], iki_kurum["b_yonetici"]
+    assert client.get(f"/api/competitions/{y}", headers=b).status_code == 404
+    assert all(x["id"] != y for x in client.get("/api/competitions", headers=b).json())
+
+
+def test_baska_kurumun_yarismasini_DEGISTIREMIYOR(client, iki_kurum):
+    """En agir bulgu buydu: olculdu, uc istekte de HTTP 200 donuyordu.
+
+    Baska kurumun yoneticisi sablonu, kriterleri ve asamayi
+    degistirebiliyordu. Kriter agirliklarini degistirmek o yarismanin
+    puanlama rubrigini degistirmek demek - yani baska bir kurumun
+    degerlendirme sonuclarini disaridan bozmak.
+    """
+    y, b = iki_kurum["yar_id"], iki_kurum["b_yonetici"]
+    saldirilar = [
+        client.put(
+            f"/api/competitions/{y}/template",
+            json={"required_headings": ["Ele Gecirildi"], "min_pages": 1, "max_pages": 5},
+            headers=b,
+        ),
+        client.put(
+            f"/api/competitions/{y}/criteria",
+            json={"criteria": [{"title": "Ele Gecirildi", "weight": 100}]},
+            headers=b,
+        ),
+        client.put(f"/api/competitions/{y}/status", json={"status": "completed"}, headers=b),
+    ]
+    for r in saldirilar:
+        assert r.status_code == 404, f"{r.request.url} -> {r.status_code}"
+
+    # Ve gercekten DEGISMEMIS olmali - 404 donup yine de yazan bir uc nokta
+    # en kotusu olurdu.
+    kalan = client.get(f"/api/competitions/{y}", headers=iki_kurum["a_yonetici"]).json()
+    assert kalan["required_headings"] == ["Özgünlük"]
+    assert [k["title"] for k in kalan["criteria"]] == ["Özgünlük"]
+    assert kalan["status"] == "open"
+
+
+def test_yeni_yarisma_OLUSTURANIN_kurumuna_baglaniyor(client, iki_kurum):
+    """"yonetici olarak yarisma baslattim ama kimin yarismasi bu tam
+    olarak??" - cevabi artik yanitta duruyor."""
+    r = client.post(
+        "/api/competitions",
+        json={"name": "B'nin Yarışması", "category_label": "Vize"},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 201, r.text[:200]
+    assert r.json()["organization_id"] == "org-cbu"
+    # A kurumu bunu gormemeli
+    assert all(
+        x["id"] != r.json()["id"]
+        for x in client.get("/api/competitions", headers=iki_kurum["a_yonetici"]).json()
+    )
+
+
+# --- Hakem atama: kurumlar arasi atama yapilamaz -------------------------
+
+def test_hakem_listesi_yalnizca_KENDI_kurumunu_gosteriyor(client, iki_kurum):
+    """Bu liste ad-soyad ve E-POSTA donduruyor; kapsamsiz hali, herhangi bir
+    kurumun yoneticisine tum sistemin hakem rehberini verirdi."""
+    epostalar = {
+        h["email"] for h in client.get("/api/assignments/referees", headers=iki_kurum["b_yonetici"]).json()
+    }
+    assert "b.hakem@cbu.edu.tr" in epostalar
+    assert not any(e.endswith("@t3.org") for e in epostalar), epostalar
+
+
+def test_yabanci_kurumun_hakemi_yarismaya_EKLENEMIYOR(client, db_session, iki_kurum):
+    """Onceden "hakem" demek "HERHANGI bir kurumda hakem" demekti; bir
+    kurumun raporu baska kurumun hakemine atanabiliyordu."""
+    from app import models
+
+    b_hakem_id = (
+        db_session.query(models.User)
+        .filter(models.User.email == "b.hakem@cbu.edu.tr")
+        .first()
+        .id
+    )
+    r = client.post(
+        f"/api/assignments/competitions/{iki_kurum['yar_id']}/referees",
+        json={"referee_id": b_hakem_id},
+        headers=iki_kurum["a_yonetici"],
+    )
+    assert r.status_code == 400, f"yabanci kurumun hakemi eklendi (HTTP {r.status_code})"
+
+
+def test_yabanci_kurumun_yarismasina_hakem_EKLENEMIYOR(client, db_session, iki_kurum):
+    from app import models
+
+    b_hakem_id = (
+        db_session.query(models.User)
+        .filter(models.User.email == "b.hakem@cbu.edu.tr")
+        .first()
+        .id
+    )
+    r = client.post(
+        f"/api/assignments/competitions/{iki_kurum['yar_id']}/referees",
+        json={"referee_id": b_hakem_id},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 404, f"HTTP {r.status_code}"
+    r = client.post(
+        f"/api/assignments/competitions/{iki_kurum['yar_id']}/auto-assign",
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 404, f"HTTP {r.status_code}"
+
+
+def test_yabanci_kurumun_raporunun_hakemi_DEGISTIRILEMIYOR(client, db_session, iki_kurum):
+    from app import models
+
+    b_hakem_id = (
+        db_session.query(models.User)
+        .filter(models.User.email == "b.hakem@cbu.edu.tr")
+        .first()
+        .id
+    )
+    rid = iki_kurum["rapor_id"]
+    r = client.put(
+        f"/api/assignments/{rid}",
+        json={"referee_id": b_hakem_id},
+        headers=iki_kurum["b_yonetici"],
+    )
+    assert r.status_code == 404, f"HTTP {r.status_code}"
+    # Atama silme de ayni kapidan gecmeli - PUT kapali DELETE acik olsaydi
+    # saldirgan raporu atamasiz birakip sureci durdurabilirdi.
+    assert (
+        client.delete(f"/api/assignments/{rid}", headers=iki_kurum["b_yonetici"]).status_code
+        == 404
+    )
+
+
+# --- Gosterge ve kategori ------------------------------------------------
+
+def test_gosterge_sayaci_yabanci_raporu_SAYMIYOR(client, iki_kurum):
+    """Sayilar zararsiz gorunuyor ama kac basvuru alindigi kuruma ait bir
+    bilgi; ustelik sayacin artisi baska kurumun hareketini ele verir."""
+    b = client.get("/api/dashboard/stats", headers=iki_kurum["b_yonetici"]).json()
+    assert b["total_reports"] == 0, b
+    a = client.get("/api/dashboard/stats", headers=iki_kurum["a_yonetici"]).json()
+    assert a["total_reports"] == 1, a
+
+
+def test_kategori_listesi_kurumla_sinirli(client, iki_kurum):
+    adlar = {
+        k["name"] for k in client.get("/api/categories", headers=iki_kurum["b_yonetici"]).json()
+    }
+    assert "AI & Machine Learning" not in adlar, adlar

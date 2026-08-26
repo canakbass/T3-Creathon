@@ -176,6 +176,13 @@ class Category(Base):
     id = Column(String, primary_key=True, index=True)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
+    # BOS = ortak/sistem kategorisi, her kurum gorur. Dolu = yalnizca o
+    # kurumun kategorisi. Kategori adi masum gorunuyor ama bir kurumun
+    # calistigi alanlari ("Vize Odevi - ML 101") disariya anlatiyor;
+    # kurumun kendi actigi kategori kurumda kalmali.
+    organization_id = Column(
+        String, ForeignKey("organizations.id"), nullable=True, index=True
+    )
 
     competitions = relationship("Competition", back_populates="category")
     criteria_list = relationship("Criteria", back_populates="category")

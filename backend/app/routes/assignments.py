@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from .. import models, schemas, auth
+from .. import models, schemas, auth, tenancy
 
 router = APIRouter(prefix="/api/assignments", tags=["Assignments"])
 
@@ -27,13 +27,29 @@ router = APIRouter(prefix="/api/assignments", tags=["Assignments"])
 _YONETICI = auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
 
 
-def _hakem_mi(db: Session, user_id: str) -> bool:
-    return (
-        db.query(models.UserRole)
-        .filter(models.UserRole.user_id == user_id, models.UserRole.role == "REFEREE")
-        .first()
-        is not None
-    )
+def _rapor_getir_yetkiliyse(report_id: str, user, db: Session) -> models.Report:
+    """Raporu getirir; yabanci kurumunsa YOKMUS gibi 404 doner.
+
+    Atama uc noktalari raporu dogrudan sorguluyordu; boylece bir kurumun
+    yoneticisi BASKA bir kurumun raporunun hakemini degistirebiliyordu.
+    Rapor okunmuyor olsa bile bu bir sizinti: atama yaniti hakemin
+    e-postasini donduruyor ve 400/404 farki raporun varligini dogruluyor.
+    """
+    rapor = db.query(models.Report).filter(models.Report.id == report_id).first()
+    if rapor is None or not tenancy.ayni_kurum_mu(rapor, user):
+        raise tenancy.yoksa_gibi_davran("Rapor bulunamadi.")
+    return rapor
+
+
+def _hakem_mi(db: Session, user_id: str, user) -> bool:
+    """Bu kisi ISTEGIN YAPILDIGI KURUMDA hakem mi?
+
+    Onceden kurum sorulmuyordu, yani "hakem" demek "HERHANGI bir kurumda
+    hakem" demekti. Bu, bir kurumun raporunu baska kurumun hakemine atamayi
+    mumkun kiliyordu - kurum sinirini asmanin en sessiz yolu, cunku atamayi
+    yapan yonetici hakemin hangi kurumda oldugunu hicbir yerde gormuyordu.
+    """
+    return user_id in tenancy.kurumun_rolleri(db, tenancy.aktif_kurum(user), "REFEREE")
 
 
 @router.get("/referees", response_model=List[schemas.RefereeSummary])
@@ -47,7 +63,17 @@ def list_referees(
     `competition_id` verilirse yalnizca o yarismada gorevli hakemler doner.
     Yuk bilgisi, yoneticinin dagilimi gorup elle mudahale edebilmesi icin.
     """
+    # Kurumun hakemleri: bu liste ad-soyad ve E-POSTA donduruyor. Kurum
+    # kapsami olmadan, herhangi bir kurumun yoneticisi butun sistemin hakem
+    # rehberini indirebilirdi.
+    kurum_hakemleri = set(
+        tenancy.kurumun_rolleri(db, tenancy.aktif_kurum(current_user), "REFEREE")
+    )
+
     if competition_id:
+        # Yarismayi da kapidan geciriyoruz: yoksa yabanci kurumun yarisma
+        # kimligi verilerek o yarismanin hakem listesi okunabilirdi.
+        tenancy.yarisma_getir_yetkiliyse(competition_id, current_user, db)
         kayitlar = (
             db.query(models.CompetitionReferee)
             .filter(models.CompetitionReferee.competition_id == competition_id)
@@ -55,17 +81,12 @@ def list_referees(
         )
         hakemler = [k.referee for k in kayitlar if k.referee]
     else:
-        hakem_idleri = [
-            r.user_id
-            for r in db.query(models.UserRole)
-            .filter(models.UserRole.role == "REFEREE")
-            .all()
-        ]
         hakemler = (
-            db.query(models.User).filter(models.User.id.in_(hakem_idleri)).all()
-            if hakem_idleri
+            db.query(models.User).filter(models.User.id.in_(kurum_hakemleri)).all()
+            if kurum_hakemleri
             else []
         )
+    hakemler = [h for h in hakemler if h.id in kurum_hakemleri]
 
     sonuc = []
     for h in hakemler:
@@ -97,19 +118,16 @@ def add_referee_to_competition(
     current_user: models.User = Depends(_YONETICI),
 ):
     """Yarismaya hakem ekler. Atama yalnizca bu listedekilere yapilabilir."""
-    yarisma = db.query(models.Competition).filter(
-        models.Competition.id == competition_id
-    ).first()
-    if not yarisma:
-        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+    yarisma = tenancy.yarisma_getir_yetkiliyse(competition_id, current_user, db)
 
     hakem = db.query(models.User).filter(models.User.id == govde.referee_id).first()
-    if not hakem:
-        raise HTTPException(status_code=404, detail="Kullanici bulunamadi.")
-    if not _hakem_mi(db, hakem.id):
+    # "Bu kurumun hakemi degil" ile "boyle bir kullanici yok" AYNI cevabi
+    # veriyor: ayirt edilebilseydi, yonetici rastgele kimlikler deneyerek
+    # sistemdeki hesaplarin varligini dogrulayabilirdi.
+    if not hakem or not _hakem_mi(db, hakem.id, current_user):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{hakem.email} hakem rolune sahip degil.",
+            detail="Bu kurumda hakem rolune sahip boyle bir kullanici yok.",
         )
 
     zaten = (
@@ -157,11 +175,7 @@ def auto_assign(
     bile dengeyi bozmuyor. ZATEN ATANMIS raporlara dokunmuyor - yoneticinin
     elle yaptigi atama korunur.
     """
-    yarisma = db.query(models.Competition).filter(
-        models.Competition.id == competition_id
-    ).first()
-    if not yarisma:
-        raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
+    yarisma = tenancy.yarisma_getir_yetkiliyse(competition_id, current_user, db)
 
     hakem_kayitlari = (
         db.query(models.CompetitionReferee)
@@ -196,7 +210,7 @@ def auto_assign(
         havuz_daraltildi = True
 
     atanmamis = (
-        db.query(models.Report)
+        tenancy.kurum_filtresi(db.query(models.Report), models.Report, current_user)
         .outerjoin(models.Assignment)
         .filter(
             models.Report.competition_id == competition_id,
@@ -302,15 +316,13 @@ def reassign(
     Yonetici, dagitim otomatik yapilmis olsa bile tek tek mudahale
     edebilmeli - orn. cikar catismasi ya da uzmanlik alani nedeniyle.
     """
-    rapor = db.query(models.Report).filter(models.Report.id == report_id).first()
-    if not rapor:
-        raise HTTPException(status_code=404, detail="Rapor bulunamadi.")
+    rapor = _rapor_getir_yetkiliyse(report_id, current_user, db)
 
     hakem = db.query(models.User).filter(models.User.id == govde.referee_id).first()
-    if not hakem or not _hakem_mi(db, hakem.id):
+    if not hakem or not _hakem_mi(db, hakem.id, current_user):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Gecerli bir hakem secin.",
+            detail="Bu kurumda hakem rolune sahip boyle bir kullanici secin.",
         )
 
     # CIKAR CATISMASI: kimse kendi raporunun hakemi olamaz. Elle atamada da
@@ -381,9 +393,12 @@ def unassign(
     current_user: models.User = Depends(_YONETICI),
 ):
     """Atamayi kaldirir (rapor tekrar dagitilmamis havuza doner)."""
-    atama = db.query(models.Assignment).filter(
-        models.Assignment.report_id == report_id
-    ).first()
+    # Once RAPORU kapidan geciriyoruz, sonra atamaya bakiyoruz. Ters sirada
+    # olsaydi yabanci kurumun raporu icin "Bu rapor icin atama yok." (404)
+    # ile "atamasi kaldirilamaz" (400) farkli cevaplar verir; ikisi arasindaki
+    # fark, baska kurumun raporunun ATANMIS olup olmadigini sizdirirdi.
+    rapor = _rapor_getir_yetkiliyse(report_id, current_user, db)
+    atama = rapor.assignment
     if not atama:
         raise HTTPException(status_code=404, detail="Bu rapor icin atama yok.")
 
