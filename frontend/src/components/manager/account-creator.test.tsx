@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AccountCreator } from "./account-creator";
+import { useAuthStore } from "@/store/auth-store";
 
 /**
  * Hesapları YÖNETİCİ açar, şifreyi SİSTEM üretir.
@@ -44,6 +45,13 @@ function mockCreate(basarisizlar: string[] = []) {
 
 describe("AccountCreator", () => {
   const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    // Varsayılan: yarışma yöneticisi. Yetki bağlı davranışı sınayan testler
+    // bunu kendi içinde değiştiriyor.
+    useAuthStore.setState({ role: "COMPETITION_MANAGER" });
+  });
+
   afterEach(() => {
     global.fetch = originalFetch;
   });
@@ -129,5 +137,35 @@ describe("AccountCreator", () => {
     await user.click(screen.getByTestId("account-submit"));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+  });
+
+  it("yönetici, VEREMEYECEĞİ rolleri seçenek olarak görmüyor", () => {
+    // Backend zaten reddediyor (403); burada gizlemenin sebebi DOĞRULUK:
+    // yönetici o rolü seçip 20 adres girse her satır ayrı ayrı hata döner ve
+    // listeyi baştan girmek zorunda kalırdı.
+    mockCreate();
+    useAuthStore.setState({ role: "COMPETITION_MANAGER" });
+    render(<AccountCreator />);
+
+    const secenekler = Array.from(
+      screen.getByTestId("account-role").querySelectorAll("option"),
+    ).map((o) => o.getAttribute("value"));
+    expect(secenekler).toEqual(["COMPETITOR", "REFEREE"]);
+    expect(screen.getByTestId("account-role-note")).toHaveTextContent(
+      /yalnızca kurum sorumlusu/i,
+    );
+  });
+
+  it("kurum sorumlusu TÜM rolleri verebiliyor", () => {
+    mockCreate();
+    useAuthStore.setState({ role: "ORG_OWNER" });
+    render(<AccountCreator />);
+
+    const secenekler = Array.from(
+      screen.getByTestId("account-role").querySelectorAll("option"),
+    ).map((o) => o.getAttribute("value"));
+    expect(secenekler).toContain("COMPETITION_MANAGER");
+    expect(secenekler).toContain("ORG_OWNER");
+    expect(screen.queryByTestId("account-role-note")).not.toBeInTheDocument();
   });
 });

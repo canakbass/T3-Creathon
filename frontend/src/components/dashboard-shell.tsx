@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { getMyOrganization } from "@/lib/api";
+import { ContextSwitcher } from "./context-switcher";
 import { ROLE_DEFINITIONS, type Role } from "@/lib/roles";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -63,13 +64,16 @@ export function DashboardShell({ role, children }: DashboardShellProps) {
             </p>
             <h1 className="text-lg font-bold text-foreground">{definition.label} Paneli</h1>
           </div>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="rounded-lg border border-border px-4 py-2 text-sm font-semibold text-muted transition hover:border-brand-300 hover:text-brand-700"
-          >
-            Çıkış yap
-          </button>
+          <div className="flex items-center gap-2">
+            <ContextSwitcher />
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg border border-border px-4 py-2 text-sm font-semibold text-muted transition hover:border-brand-300 hover:text-brand-700"
+            >
+              Çıkış yap
+            </button>
+          </div>
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>

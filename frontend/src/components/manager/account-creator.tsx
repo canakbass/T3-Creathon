@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { createUser } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
+import { useAuthStore } from "@/store/auth-store";
 
 /**
  * Yöneticinin TOPLU hesap açtığı ekran.
@@ -27,7 +28,22 @@ const ROLLER = [
   { deger: "REFEREE", etiket: "Hakem" },
   { deger: "COMPETITION_MANAGER", etiket: "Yarışma Yöneticisi" },
   { deger: "EVALUATION_MANAGER", etiket: "Değerlendirme Yöneticisi" },
+  { deger: "ORG_OWNER", etiket: "Kurum Sorumlusu" },
 ] as const;
+
+/**
+ * Yalnızca KURUM SORUMLUSUNUN verebileceği roller.
+ *
+ * Backend bunu zaten reddediyor (403); burada gizlemenin sebebi güvenlik
+ * değil, DOĞRULUK: yönetici bu rolü seçip 20 adres girse, her satır ayrı
+ * ayrı hata dönerdi ve listeyi baştan girmek zorunda kalırdı. Seçilemeyen
+ * bir şeyi göstermemek, reddedilecek bir işi yaptırmaktan iyidir.
+ *
+ * Yetki YUKARI DOĞRU dağıtılamaz: yarışma yöneticisi yönetici üretebilseydi,
+ * tek bir yönetici hesabı ele geçirildiğinde saldırgan kendine kalıcı yetki
+ * basabilirdi.
+ */
+const YALNIZCA_SORUMLU = ["ORG_OWNER", "COMPETITION_MANAGER", "EVALUATION_MANAGER"];
 
 interface Sonuc {
   eposta: string;
@@ -36,6 +52,12 @@ interface Sonuc {
 }
 
 export function AccountCreator({ teamId }: { teamId?: string | null }) {
+  const aktifRol = useAuthStore((state) => state.role);
+  const sorumlu = aktifRol === "ORG_OWNER";
+  const secilebilir = ROLLER.filter(
+    (r) => sorumlu || !YALNIZCA_SORUMLU.includes(r.deger),
+  );
+
   const [epostalar, setEpostalar] = useState("");
   const [rol, setRol] = useState<string>("COMPETITOR");
   const [takim, setTakim] = useState(teamId ?? "");
@@ -82,8 +104,15 @@ export function AccountCreator({ teamId }: { teamId?: string | null }) {
       <h2 className="text-lg font-bold text-foreground">Hesap Aç</h2>
       <p className="mt-1 text-sm text-muted">
         Kullanıcılar kendi kendine kayıt olamaz. Hesapları siz açarsınız,
-        şifreyi sistem üretir ve kullanıcıya siz iletirsiniz.
+        şifreyi sistem üretir ve kullanıcıya siz iletirsiniz. Hesap, sizin
+        kurumunuza açılır.
       </p>
+      {!sorumlu ? (
+        <p data-testid="account-role-note" className="mt-2 text-xs text-muted">
+          Yönetici ve kurum sorumlusu rollerini yalnızca kurum sorumlusu
+          verebilir.
+        </p>
+      ) : null}
 
       <form onSubmit={ac} className="mt-4 flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-xs text-muted">
@@ -109,7 +138,7 @@ export function AccountCreator({ teamId }: { teamId?: string | null }) {
               aria-label="Rol"
               className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground"
             >
-              {ROLLER.map((r) => (
+              {secilebilir.map((r) => (
                 <option key={r.deger} value={r.deger}>
                   {r.etiket}
                 </option>
