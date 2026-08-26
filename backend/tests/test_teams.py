@@ -148,6 +148,9 @@ def test_yonetici_takimsiz_rapor_aktaramaz(client, sahne):
     Aksi halde rapor sisteme girer, analiz edilir, hakem karar verir ve
     sonucu HICBIR yarismaci goremez - sartname AKIS 03 karsilanmaz.
     """
+    # Dosya adinda da e-posta YOK - takimin turetilebilecegi hicbir kaynak
+    # kalmiyor. Mesaj yoneticiye NE YAPACAGINI soylemeli; "team_id zorunlu"
+    # demek, elinde olmayan bir bilgiyi istemekti.
     r = client.post(
         "/api/reports/upload",
         data={"project_name": "Sahipsiz", "competition_id": sahne["yar_id"]},
@@ -155,7 +158,8 @@ def test_yonetici_takimsiz_rapor_aktaramaz(client, sahne):
         headers=sahne["yonetici"],
     )
     assert r.status_code == 400, f"sahipsiz rapor olusturuldu (HTTP {r.status_code})"
-    assert "team_id" in r.json()["detail"]
+    detay = r.json()["detail"]
+    assert "e-posta" in detay.lower(), detay
 
 
 def test_rapor_takim_adiyla_donuyor(client, sahne):

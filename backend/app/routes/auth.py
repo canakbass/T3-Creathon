@@ -322,20 +322,30 @@ def _takima_ekle(db: Session, kullanici: models.User, govde, kurum: str):
     takim = db.query(models.Team).filter(models.Team.id == govde.team_id).first()
     if takim is None or not tenancy.ayni_kurum_mu(takim, kullanici_kurum_sahtesi(kurum)):
         raise HTTPException(status_code=404, detail="Takim bulunamadi.")
+    adres = (kullanici.email or "").strip().lower()
+    # E-POSTA ile ariyoruz, kimlikle degil: uyelik kaydi hesap acilmadan
+    # ONCE (yonetici raporu yuklerken) olusmus olabilir. Kimlikle arasaydik
+    # ayni kisi icin IKINCI bir uyelik satiri acar ve takimda ayni adres iki
+    # kez gorunurdu.
     zaten = (
         db.query(models.TeamMember)
         .filter(
             models.TeamMember.team_id == takim.id,
-            models.TeamMember.user_id == kullanici.id,
+            models.TeamMember.email == adres,
         )
         .first()
     )
-    if zaten:
+    if zaten is not None:
+        # Bekleyen uyeligi BAGLIYORUZ. Yonetici hesabi actigi icin kimlige
+        # zaten kefil oluyor - dogrulama beklemeye gerek yok.
+        if zaten.user_id is None:
+            zaten.user_id = kullanici.id
         return takim.id
     db.add(
         models.TeamMember(
             id=str(uuid.uuid4()),
             team_id=takim.id,
+            email=adres,
             user_id=kullanici.id,
             role=govde.team_role or "uye",
         )

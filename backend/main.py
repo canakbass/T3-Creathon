@@ -138,6 +138,9 @@ def seed_db():
                         email=email,
                         password_hash=auth.hash_password(pwd),
                         full_name=ad,
+                        # Tohum hesaplarini YONETICI acmis sayiyoruz: kimlige
+                        # kefil olan var, dogrulama beklemeye gerek yok.
+                        email_verified=True,
                     )
                     db.add(db_user)
                     db.flush()
@@ -185,13 +188,16 @@ def seed_db():
                 db.flush()
                 for eposta, gorev in uyeler:
                     u = _kullanici(eposta)
-                    if u:
-                        db.add(models.TeamMember(
-                            id=str(uuid.uuid4()),
-                            team_id=takim_id,
-                            user_id=u.id,
-                            role=gorev,
-                        ))
+                    # E-POSTA kalici kimlik, `user_id` yalnizca baglanti.
+                    # Tohum hesaplari yonetici acmis sayiliyor, yani
+                    # dogrulanmis - bu yuzden dogrudan baglaniyorlar.
+                    db.add(models.TeamMember(
+                        id=str(uuid.uuid4()),
+                        team_id=takim_id,
+                        email=eposta.strip().lower(),
+                        user_id=u.id if u else None,
+                        role=gorev,
+                    ))
             db.commit()
 
         # Check if categories are seeded

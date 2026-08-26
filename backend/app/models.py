@@ -106,6 +106,22 @@ class User(Base):
     # doldurulan bir alan olsaydi, kullaniciyi yazan yerlerden birini
     # unutmak aramadan SESSIZCE dusurmek demekti.
     search_key = Column(String, index=True, nullable=True)
+    # E-POSTA DOGRULANDI MI.
+    #
+    # Uyelik e-postaya bagli oldugu icin bu bayrak bir GUVENLIK KAPISI:
+    # dogrulanmamis bir adres hicbir takima baglanmiyor. Yonetici tarafindan
+    # acilan hesaplar dogrulanmis sayiliyor - orada kimlige YONETICI kefil
+    # oluyor ve T3'un mevcut pratigi de bu.
+    email_verified = Column(Boolean, default=False, nullable=False)
+    # OTURUM DONEMI. Sifre degisince/sifirlaninca artiyor ve o ana kadar
+    # imzalanmis TUM tokenlar gecersiz oluyor.
+    #
+    # NEDEN: token 60 dakika gecerli ve rol/kurum veri tabanina karsi
+    # dogrulaniyordu ama SIFRE dogrulanmiyordu - yani calinmis bir token,
+    # kurban sifresini sifirladiktan SONRA da bir saat daha calisiyordu.
+    # Bu, sifre sifirlamanin tek amacini ("hesabi geri al") ortadan
+    # kaldiriyordu.
+    token_epoch = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=_utcnow)
 
     # Rol artik BURADA DEGIL, ayri UserRole tablosunda.
@@ -469,20 +485,100 @@ class Team(Base):
 
     @property
     def member_ids(self) -> set:
-        return {m.user_id for m in self.members}
+        """HESABI OLAN uyelerin kimlikleri.
+
+        None'lar ELENIYOR. Uyelik artik e-postaya bagli ve hesabi henuz
+        olmayan "bekleyen" uyelerin `user_id`si bos. Elenmezse uc ayri
+        sessiz hata cikar:
+          1. Bes bekleyen uye kumede TEK BIR None'a cokusur - `len()` artik
+             uye sayisi degil.
+          2. `None in member_ids` True doner; kimligi olmayan iki FARKLI
+             kisi esitlenir.
+          3. Iki takimin kesisimi `{None}` olur ve bos olmadigi icin
+             "bu takimlar uye paylasiyor" yanlis pozitifi uretir.
+        """
+        return {m.user_id for m in self.members if m.user_id is not None}
+
+    @property
+    def member_emails(self) -> set:
+        """Uyelerin KALICI kimligi: normalize edilmis e-postalar.
+
+        Hesap acilmadan once de dolu; uyeligin gercek anahtari bu.
+        """
+        return {(m.email or "").strip().lower() for m in self.members if m.email}
+
+    @property
+    def bekleyen_sayisi(self) -> int:
+        """Henuz hesabi olmayan uye sayisi - yoneticiye gostermek icin."""
+        return sum(1 for m in self.members if m.user_id is None)
 
 
 class TeamMember(Base):
+    """Takim uyeligi. KALICI KIMLIK E-POSTA, `user_id` yalnizca BAGLANTI.
+
+    NEDEN: yonetici raporu dosya adindan cikarilan e-postalarla yukluyor ve o
+    adreslerin sahibi henuz sisteme kayitli olmayabiliyor. Uyelik kaydi hesap
+    acilmadan ONCE olusuyor, hesap acilip e-posta DOGRULANINCA baglaniyor.
+
+    DIKKAT - AYNI DEGISIKLIK IKI KATMANDA ZIT IKI HATA URETIYOR:
+      * Python'da `None == None` True: `member_ids` None'lari elemezse
+        bekleyen uyeler birbirine cokusur (bkz. Team.member_ids).
+      * SQL'de `NULL = NULL` BILINMEZ: (team_id, user_id) uzerindeki eski
+        kisit bekleyen satirlar icin TAMAMEN devre disi kalirdi ve ayni
+        adres ayni takima yuzlerce kez eklenebilirdi.
+    Bu yuzden asil kisit (team_id, email) uzerinde.
+    """
+
     __tablename__ = "team_members"
-    __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_takim_uye"),)
+    __table_args__ = (UniqueConstraint("team_id", "email", name="uq_takim_eposta"),)
 
     id = Column(String, primary_key=True, index=True)
     team_id = Column(String, ForeignKey("teams.id"), nullable=False, index=True)
-    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # KALICI KIMLIK. Normalize edilmis (kirpilmis + kucultulmus) saklanir.
+    # Turkce katlama UYGULANMAZ: `karaş@x.com` ile `karas@x.com` FARKLI
+    # kisilerdir (bkz. dosya_adi.eposta_normalle).
+    email = Column(String, nullable=False, index=True)
+    # BAGLANTI. Hesap acilip e-posta dogrulanana kadar bos.
+    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     # kaptan | uye | danisman  (bkz. TAKIM_GOREVLERI)
     role = Column(String, nullable=False, default="uye")
 
     team = relationship("Team", back_populates="members")
+    user = relationship("User")
+
+
+class EmailToken(Base):
+    """E-posta dogrulama ve sifre sifirlama jetonlari.
+
+    SIFRE GIBI SAKLANIYOR: veri tabaninda yalnizca SHA-256 ozeti duruyor,
+    ham jeton yalnizca gonderilen e-postada. Veri tabani sizarsa jetonlar
+    kullanilamaz.
+
+    NEDEN SHA-256, BCRYPT DEGIL: jetonun entropisi zaten yuksek
+    (`secrets.token_urlsafe(32)`), yani kaba kuvvet zaten imkansiz. Bcrypt'in
+    yavasligi burada bir sey kazandirmiyor ama her dogrulamada TUM tabloyu
+    taramayi zorunlu kilardi (ozetler tuzlu oldugu icin aranamaz). SHA-256
+    ozeti benzersiz indeksli - arama sabit maliyetli.
+
+    NEDEN JWT DEGIL: bu jetonlar TEK KULLANIMLIK ve IPTAL EDILEBILIR olmali;
+    JWT ikisini de yapamaz. Kullanilmis bir sifirlama baglantisi ikinci kez
+    calismamali.
+    """
+
+    __tablename__ = "email_tokens"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # dogrulama | sifirlama
+    purpose = Column(String, nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    # Tek kullanimlik olmasini saglayan alan. Tuketim ATOMIK olmali:
+    # once SELECT sonra UPDATE yapilirsa iki es zamanli istek ayni jetonu
+    # iki kez harcar.
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow)
+
     user = relationship("User")
 
 
@@ -572,6 +668,16 @@ class Report(Base):
         """
         if self.team_id and self.team is not None:
             if hakem.id in self.team.member_ids:
+                return True
+            # E-POSTA ILE DE BAKIYORUZ - bu satir olmadan kural SESSIZCE
+            # ACILIYOR (fail-open). Hakemin e-postasi takimda BEKLEYEN uye
+            # olarak duruyorsa (user_id bos) kimlik kumesinde bulunmaz,
+            # fonksiyon "yukleyen mi" dalina duser, rapor yonetici tarafindan
+            # aktarildigi icin o da False doner ve sonuc "catisma yok"
+            # olurdu. Yani kisi KENDI TAKIMININ raporunu degerlendirebilirdi -
+            # tam olarak bu kontrolun engellemek icin var oldugu sey.
+            hakem_eposta = (getattr(hakem, "email", "") or "").strip().lower()
+            if hakem_eposta and hakem_eposta in self.team.member_emails:
                 return True
         return hakem.id == self.submitted_by_id
     category = relationship("Category")
@@ -675,3 +781,32 @@ class FinalDecision(Base):
 @event.listens_for(User, "before_update")
 def _arama_anahtarini_hesapla(mapper, connection, hedef):  # noqa: ARG001
     hedef.search_key = turkce_katla(f"{hedef.email or ''} {hedef.full_name or ''}")
+
+
+# --- Uyelik e-postasini normalle ve gerekirse TURET ----------------------
+#
+# IKI IS YAPIYOR:
+#
+# 1. NORMALLEME: e-posta uyeligin KALICI KIMLIGI. Bir yerde "Ali@X.com",
+#    baska bir yerde "ali@x.com" yazilirsa (team_id, email) benzersizlik
+#    kisiti ikisini FARKLI sayar ve ayni kisi takimda iki kez gorunur.
+#    Kirpma+kucultme tek yerde yapiliyor.
+#
+#    Turkce katlama BURADA UYGULANMAZ: `karaş@x.com` ile `karas@x.com`
+#    farkli kisilerdir ve katlanirlarsa birinin raporunu digeri gorur.
+#
+# 2. TURETME: yalnizca `user_id` verilerek olusturulan bir uyelik satirinda
+#    e-postayi bagli kullanicidan aliyoruz. Cagri yerlerini tek tek
+#    guncellemek yerine burada yapmamizin sebebi `search_key` ile ayni:
+#    unutulan tek bir cagri yeri, e-postasi BOS bir uyelik demek - ve o satir
+#    hicbir zaman eslesmedigi icin uye kendi takiminin sonucunu goremezdi.
+@event.listens_for(TeamMember, "before_insert")
+@event.listens_for(TeamMember, "before_update")
+def _uyelik_epostasini_duzenle(mapper, connection, hedef):  # noqa: ARG001
+    if not hedef.email and hedef.user_id:
+        satir = connection.execute(
+            User.__table__.select().where(User.id == hedef.user_id)
+        ).first()
+        if satir is not None:
+            hedef.email = satir.email
+    hedef.email = (hedef.email or "").strip().lower()

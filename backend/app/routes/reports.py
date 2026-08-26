@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from ..database import get_db
-from .. import models, schemas, auth, tenancy
+from .. import models, schemas, auth, tenancy, dosya_adi
 from ..services import ai
 from ..services import storage
 from . import competitions
@@ -371,13 +371,121 @@ def run_background_analysis(report_id: str, file_path: str, db: Session):
             db.commit()
 
 
+def _epostalari_ayikla(ham) -> list:
+    """Virgul/noktali virgul/bosluk/satir ile ayrilmis e-postalari ayiklar.
+
+    Gercek kullanimda liste Excel'den ya da bir e-postadan kopyalaniyor;
+    ayirici her zaman ayni olmuyor. Tekillestirme SIRA KORUNARAK yapiliyor -
+    ilk yazilan uye takim kaptani sayiliyor.
+    """
+    if not ham:
+        return []
+    parcalar = [p for p in re.split(r"[\s,;]+", ham) if p]
+    sonuc = []
+    gorulen = set()
+    for parca in parcalar:
+        adres = dosya_adi.eposta_normalle(parca)
+        # "@" ve nokta yoksa e-posta degil; sessizce atmak yerine hata
+        # veriyoruz, cunku yonetici yanlis yazdigini bilmeli.
+        if "@" not in adres or "." not in adres.split("@", 1)[1]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Gecerli bir e-posta degil: {parca}",
+            )
+        if adres not in gorulen:
+            gorulen.add(adres)
+            sonuc.append(adres)
+    return sonuc
+
+
+def _takimi_bul_ya_da_ac(db: Session, epostalar: list, current_user) -> models.Team:
+    """E-posta kumesinden takimi bulur; yoksa acar.
+
+    ANAHTAR SIRADAN BAGIMSIZ (dosya_adi.takim_anahtari): dosya adinda uye
+    sirasi degisirse ayni ekip icin IKINCI bir takim acilmasi, o ekibin
+    raporlarinin iki takima dagilmasi demekti - ve uyeler birbirinin
+    sonucunu goremezdi.
+
+    TAKIM OLUSTURMA BIZIM ISIMIZ DEGIL demistik; bu onunla celismiyor.
+    Burada bir takim YONETMIYORUZ, teslim edilen dosyadan gelen veriyi
+    KAYDEDIYORUZ. Gercek kayit hala KYS'de; `external_ref` ileride oradan
+    gelen kimlikle eslestirmek icin duruyor.
+    """
+    kurum = tenancy.aktif_kurum(current_user)
+    anahtar = dosya_adi.takim_anahtari(epostalar)
+
+    takim = (
+        db.query(models.Team)
+        .filter(
+            models.Team.external_ref == anahtar,
+            models.Team.organization_id == kurum,
+        )
+        .first()
+    )
+    if takim is not None:
+        return takim
+
+    takim = models.Team(
+        id=str(uuid.uuid4()),
+        name=dosya_adi.takim_adi_uret(epostalar),
+        external_ref=anahtar,
+        organization_id=kurum,
+    )
+    db.add(takim)
+    db.flush()
+
+    for sira, adres in enumerate(epostalar):
+        db.add(
+            models.TeamMember(
+                id=str(uuid.uuid4()),
+                team_id=takim.id,
+                email=adres,
+                # HESABI VARSA HEMEN BAGLANIYOR - ama yalnizca e-postasi
+                # DOGRULANMISSA. Dogrulanmamis bir adresi baglamak, "bir
+                # takim uyesinin e-postasini ilk kaydettiren kisi o takimin
+                # sonuclarini gorur" acigini geri acardi.
+                user_id=_dogrulanmis_kullanici_id(db, adres),
+                role="kaptan" if sira == 0 else "uye",
+            )
+        )
+    db.flush()
+    return takim
+
+
+def _dogrulanmis_kullanici_id(db: Session, adres: str):
+    """Bu adrese ait DOGRULANMIS hesabin kimligi (yoksa None).
+
+    Dogrulama sarti pazarlik konusu degil: uyelik e-postaya bagli oldugu
+    icin "bu adresin sahibi misin" sorusunun cevabi, o takimin butun
+    sonuclarini gormeye yetiyor.
+    """
+    kullanici = (
+        db.query(models.User)
+        .filter(func.lower(models.User.email) == adres)
+        .first()
+    )
+    if kullanici is None or not kullanici.email_verified:
+        return None
+    return kullanici.id
+
+
 @router.post("/upload", response_model=schemas.ReportResponse, status_code=status.HTTP_201_CREATED)
 async def upload_report(
     background_tasks: BackgroundTasks,
-    project_name: str = Form(...),
+    # Proje adi ARTIK ZORUNLU DEGIL: verilmezse dosya adindan turetiliyor.
+    # Toplu aktarimda yoneticinin her dosya icin ad yazmasi gereksiz bir
+    # engeldi ve pratikte adi dosyanin kendisi tasiyor.
+    project_name: str = Form(None),
     category_id: str = Form(None),
     competition_id: str = Form(None),
     team_id: str = Form(None),
+    # TAKIM UYELERI - virgul/bosluk/satir ile ayrilmis e-postalar.
+    #
+    # Kullanicinin istegi: "yonetici raporu teslim eden kisilerin mailini
+    # girsin ya da GONDERILEN DOSYALAR UZERINDEN isimlendirilebilsin".
+    # Verilmezse dosya adindan cikariliyor; ikisi de yoksa `team_id`ye
+    # dusuluyor.
+    member_emails: str = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(
@@ -445,25 +553,66 @@ async def upload_report(
     # Sahiplik artik takimdan geliyor.
     # --- Raporun SAHIBI takim -------------------------------------------
     #
-    # team_id ZORUNLU. Sahipsiz bir rapor sisteme girer, analiz edilir, hakem
-    # karar verir ve sonucunu HICBIR yarismaci goremez - sartname AKIS 03
-    # ("yarismaci sonucunu goruntuler") karsilanmaz. Bu yuzden aktarim
-    # sirasinda takim belirtilmek zorunda.
+    # RAPOR MUTLAKA BIR TAKIMA BAGLANIR. Sahipsiz bir rapor sisteme girer,
+    # analiz edilir, hakem karar verir ve sonucunu HICBIR yarismaci goremez -
+    # sartname AKIS 03 ("yarismaci sonucunu goruntuler") karsilanmaz.
+    #
+    # UC KAYNAK, SU SIRAYLA:
+    #   1. `member_emails` - yonetici acikca yazdiysa en guvenilir kaynak
+    #   2. dosya adi        - "232805068@ogr.cbu.edu.tr_can@gmail.com.pdf"
+    #   3. `team_id`        - mevcut bir takima dogrudan baglama
+    #
+    # Takim kimligi ARTIK ZORUNLU DEGIL: yoneticinin elinde olmayan bir
+    # bilgiydi. Elinde gercekten olan sey teslim edilen dosyalar ve o
+    # dosyalari kimin gonderdigi.
+    cozum = None
     if not team_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Rapor hangi takima ait? Aktarimda team_id zorunlu - aksi "
-                "halde raporun sonucunu hicbir yarismaci goremez."
-            ),
-        )
-    takim = db.query(models.Team).filter(models.Team.id == team_id).first()
-    # "Yok" ile "baska kurumun" AYNI cevabi veriyor: ayirt edilebilseydi
-    # yonetici rastgele kimlik deneyerek baska kurumlarin takim listesini
-    # cikarabilirdi (olculdu: var olmayan takim 404, A kurumunun takimi 201
-    # + takim adi).
-    if takim is None or not tenancy.ayni_kurum_mu(takim, current_user):
-        raise HTTPException(status_code=404, detail="Takim bulunamadi.")
+        epostalar = _epostalari_ayikla(member_emails)
+        dosya_uyarilari = []
+        if not epostalar:
+            try:
+                cozum = dosya_adi.cozumle(file.filename or "")
+            except dosya_adi.DosyaAdiHatasi as hata:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(hata)
+                ) from hata
+            epostalar = cozum["epostalar"]
+            dosya_uyarilari = cozum["uyarilar"]
+        if not epostalar:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Rapor hangi takima ait? Dosya adinda e-posta bulunamadi. "
+                    "Takim uyelerinin e-postalarini girin (orn. "
+                    "ogrenci@okul.edu.tr, arkadas@okul.edu.tr) ya da dosyayi "
+                    "e-postalarla adlandirin."
+                ),
+            )
+        takim = _takimi_bul_ya_da_ac(db, epostalar, current_user)
+        if dosya_uyarilari:
+            # Uyarilar sessizce kaybolmasin: yonetici dosya adindan cikan
+            # belirsizligi (orn. "ZEKA_ali@..." yerel kismi) gormeli.
+            for u in dosya_uyarilari:
+                print(f"[yukleme uyarisi] {file.filename}: {u}")
+    else:
+        takim = db.query(models.Team).filter(models.Team.id == team_id).first()
+        # "Yok" ile "baska kurumun" AYNI cevabi veriyor: ayirt edilebilseydi
+        # yonetici rastgele kimlik deneyerek baska kurumlarin takim listesini
+        # cikarabilirdi (olculdu: var olmayan takim 404, A kurumunun takimi
+        # 201 + takim adi).
+        if takim is None or not tenancy.ayni_kurum_mu(takim, current_user):
+            raise HTTPException(status_code=404, detail="Takim bulunamadi.")
+
+    # Proje adi verilmediyse dosya adindan turetiliyor; o da bos cikarsa
+    # dosyanin kendi adi kullaniliyor. UYDURMUYORUZ ("Isimsiz Rapor" gibi
+    # bir sey, gercekten adi olmayan raporlari ayirt edilemez kilardi).
+    if not (project_name or "").strip():
+        if cozum is None:
+            try:
+                cozum = dosya_adi.cozumle(file.filename or "")
+            except dosya_adi.DosyaAdiHatasi:
+                cozum = {"proje_adi": None}
+        project_name = cozum.get("proje_adi") or (file.filename or "Rapor")
 
     category = db.query(models.Category).filter(models.Category.id == category_id).first()
     if category is not None and not tenancy.ayni_kurum_mu(category, current_user):
@@ -480,11 +629,11 @@ async def upload_report(
         )
         
     report_id = f"RPT-2026-{str(uuid.uuid4())[:6].upper()}"
-    dosya_adi = f"{report_id}{ext}"
+    depo_adi = f"{report_id}{ext}"
     # Once gecici bir dosyaya yaziyoruz; storage.save() onu kalici depoya
     # (yerel disk ya da Supabase Storage) tasiyip nihai referansi donuyor.
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    gecici_yol = os.path.join(UPLOAD_DIR, f".tmp-{dosya_adi}")
+    gecici_yol = os.path.join(UPLOAD_DIR, f".tmp-{depo_adi}")
 
     # Dosyayi diske YAZARKEN olay dongusunu (event loop) bloklamiyoruz.
     #
@@ -507,7 +656,7 @@ async def upload_report(
     # degilse "uploads/..." yolu doner - cagiran kod ikisini de ayni
     # sekilde kullaniyor (bkz. app/services/storage.py).
     try:
-        file_path = await anyio.to_thread.run_sync(storage.save, gecici_yol, dosya_adi)
+        file_path = await anyio.to_thread.run_sync(storage.save, gecici_yol, depo_adi)
     except Exception as exc:
         # Gecici dosya ortada kalmasin.
         if os.path.exists(gecici_yol):
