@@ -29,6 +29,21 @@ def _kendi_kaydi_acik() -> bool:
     return os.getenv("SELF_REGISTRATION", "0").strip().lower() in ("1", "true", "evet")
 
 
+# Kullanici-kurum uyeligi tokene girene kadar yeni hesaplarin baglanacagi
+# kurum. Token kurumu tasimaya basladiginda burasi cagiranin AKTIF kurumu
+# olacak - govdeden ASLA alinmayacak.
+VARSAYILAN_KURUM_SLUG = "t3-vakfi"
+
+
+def _varsayilan_kurum_id(db: Session):
+    kurum = (
+        db.query(models.Organization)
+        .filter(models.Organization.slug == VARSAYILAN_KURUM_SLUG)
+        .first()
+    )
+    return kurum.id if kurum else None
+
+
 def _uret_sifre() -> str:
     """Kriptografik olarak guvenli, okunabilir gecici sifre.
 
@@ -38,13 +53,22 @@ def _uret_sifre() -> str:
     return secrets.token_urlsafe(12)
 
 
-def _rol_ver(db: Session, user: models.User, roller) -> None:
-    """Kullaniciya rol(leri) ekler. Zaten varsa tekrar eklemez."""
-    mevcut = set(user.role_list)
+def _rol_ver(db: Session, user: models.User, roller, organization_id=None) -> None:
+    """Kullaniciya BIR KURUMDAKI rol(leri) ekler. Zaten varsa tekrar eklemez.
+
+    `organization_id` govdeden DEGIL cagiranin baglamindan gelmeli - govdeye
+    acilirsa "baska kuruma kullanici acma" ucu olur.
+    """
+    mevcut = set(user.roles_in(organization_id))
     for rol in roller:
         if rol in mevcut or rol not in models.ROLLER:
             continue
-        db.add(models.UserRole(id=str(uuid.uuid4()), user_id=user.id, role=rol))
+        db.add(models.UserRole(
+            id=str(uuid.uuid4()),
+            user_id=user.id,
+            organization_id=organization_id,
+            role=rol,
+        ))
         mevcut.add(rol)
 
 
@@ -102,7 +126,7 @@ def register(user_in: schemas.UserCreate, db: Session = Depends(get_db)):
     )
     db.add(db_user)
     db.flush()  # user.id kullanilabilsin diye
-    _rol_ver(db, db_user, istenen_roller)
+    _rol_ver(db, db_user, istenen_roller, _varsayilan_kurum_id(db))
     db.commit()
     db.refresh(db_user)
     return _kullanici_yaniti(db_user)
@@ -156,7 +180,7 @@ def create_user(
     )
     db.add(kullanici)
     db.flush()
-    _rol_ver(db, kullanici, govde.roles)
+    _rol_ver(db, kullanici, govde.roles, _varsayilan_kurum_id(db))
 
     # Istege bagli: ayni islemde takima ekle. Yonetici "hesabi ac + takima
     # ekle"yi iki ayri adimda yapmak zorunda kalmasin; iki adimin arasinda

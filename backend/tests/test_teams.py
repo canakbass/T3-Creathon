@@ -511,3 +511,78 @@ def test_reanalyze_yetki_kapisindan_geciyor(client, sahne):
     assert client.post(
         "/api/reports/RPT-YOK/reanalyze", headers=sahne["yonetici"]
     ).status_code == 404
+
+
+# --- Roller artik KURUMA bagli ---------------------------------------------
+
+def test_roller_kuruma_bagli(client, db_session, sahne):
+    """Rol artik GLOBAL degil, KURUM ICINDE gecerli.
+
+    Kullanicinin sordugu senaryo: "ben hem TEKNOFEST yarismasi icin hem de
+    odev sonucu kontrolu icin ayni maile bagliysam?" Cevap: ayni kisi A
+    kurumunda hakem, B kurumunda yarismaci olabilmeli.
+
+    Onceden UserRole(user_id, role) benzersizligi bunu IMKANSIZ kiliyordu -
+    bir kurumda hakem olan HER kurumda hakemdi.
+    """
+    from app import models
+
+    org_a = models.Organization(id="org-a", name="A Kurumu", slug="a-kurumu")
+    org_b = models.Organization(id="org-b", name="B Kurumu", slug="b-kurumu")
+    db_session.add_all([org_a, org_b])
+    db_session.flush()
+
+    kisi = models.User(
+        id="u-cift", email="cift.kurum@test.org", password_hash="x", full_name="Çift Kurum"
+    )
+    db_session.add(kisi)
+    db_session.flush()
+    db_session.add_all([
+        models.UserRole(id="ur1", user_id=kisi.id, organization_id="org-a", role="REFEREE"),
+        models.UserRole(id="ur2", user_id=kisi.id, organization_id="org-b", role="COMPETITOR"),
+    ])
+    db_session.commit()
+    db_session.refresh(kisi)
+
+    # AYNI kisi, FARKLI kurumlarda FARKLI roller
+    assert kisi.roles_in("org-a") == ["REFEREE"]
+    assert kisi.roles_in("org-b") == ["COMPETITOR"]
+    # A kurumundaki hakemligi B kurumunda hicbir sey ifade etmiyor
+    assert "REFEREE" not in kisi.roles_in("org-b")
+
+
+def test_kurum_secilmemisse_HICBIR_rol(client, db_session):
+    """Eksik baglam, "filtre yoklugu" degil "erisim yoklugu" anlamina gelmeli.
+
+    Rolde ogrenilen dersin birebir tekrari: rol secmemis token tum raporlari
+    listeliyordu cunku `if rol == ...` zinciri hicbir dala girmiyordu.
+    """
+    from app import models
+
+    kisi = models.User(id="u-x", email="x@test.org", password_hash="x")
+    db_session.add(kisi)
+    db_session.flush()
+    db_session.add(
+        models.UserRole(id="ur-x", user_id=kisi.id, organization_id="org-t3", role="REFEREE")
+    )
+    db_session.commit()
+    db_session.refresh(kisi)
+
+    assert kisi.roles_in(None) == [], "kurum secilmemisken rol donduruldu"
+    assert kisi.roles_in("olmayan-kurum") == []
+
+
+def test_memberships_kurum_adiyla_donuyor(client, db_session, sahne):
+    """Giris ekrani "hangi kurum adina" sorusunu sorabilmeli: rol tek basina
+    bir kimlik degil, "T3 Vakfi'nda hakem" bir kimlik."""
+    from app import models
+
+    kisi = db_session.query(models.User).filter(
+        models.User.email == "yon@test.org"
+    ).first()
+    assert kisi is not None, 'sahne fixture yoneticiyi olusturmali'
+    uyelikler = kisi.memberships
+    assert len(uyelikler) >= 1
+    assert uyelikler[0]["organization_id"] == "org-t3"
+    assert uyelikler[0]["organization_name"] == "T3 Vakfı"
+    assert "COMPETITION_MANAGER" in uyelikler[0]["roles"]

@@ -51,19 +51,83 @@ class User(Base):
 
     @property
     def role_list(self) -> list:
-        """Kullanicinin sahip oldugu rollerin duz listesi."""
-        return [r.role for r in self.roles]
+        """TUM kurumlardaki rollerin duz listesi.
+
+        !!! YETKILENDIRMEDE KULLANMAYIN !!!
+        Bu liste kurum ayrimi YAPMAZ. Bir kullanicinin A kurumundaki hakem
+        rolu, B kurumunda hicbir sey ifade etmemeli. Yetki kontrolu icin
+        `roles_in(org_id)` kullanin.
+
+        Geriye donuk uyumluluk icin duruyor (giris yaniti, hata mesajlari).
+        """
+        return sorted({r.role for r in self.roles})
+
+    def roles_in(self, organization_id) -> list:
+        """Kullanicinin BELIRLI BIR KURUMDAKI rolleri.
+
+        Yetkilendirmenin dayanmasi gereken tek liste budur. `organization_id`
+        None ise bos liste doner - "kurum secilmemis" durumu "her yetki" degil
+        "hicbir yetki" anlamina gelmeli (rolde ogrenilen dersin birebir
+        tekrari: eksik baglam, filtre yoklugu degil erisim yoklugudur).
+        """
+        if organization_id is None:
+            return []
+        return sorted({r.role for r in self.roles if r.organization_id == organization_id})
+
+    @property
+    def memberships(self) -> list:
+        """[{organization_id, organization_name, roles}] - giris ekrani icin.
+
+        Cok kurumlu kullanici giriste HANGI KURUM ADINA calisacagini secmeli;
+        "hakem" tek basina bir kimlik degil, "T3 Vakfi'nda hakem" bir kimlik.
+        """
+        gruplu = {}
+        for r in self.roles:
+            if r.organization_id is None:
+                continue
+            kayit = gruplu.setdefault(
+                r.organization_id,
+                {
+                    "organization_id": r.organization_id,
+                    "organization_name": r.organization.name if r.organization else None,
+                    "roles": set(),
+                },
+            )
+            kayit["roles"].add(r.role)
+        return [
+            {**k, "roles": sorted(k["roles"])}
+            for k in sorted(gruplu.values(), key=lambda x: x["organization_id"])
+        ]
 
 
 class UserRole(Base):
+    """Kullanicinin BIR KURUMDAKI rolu (uyelik).
+
+    NEDEN KURUM ALANI VAR: bu tablo (user_id, role) benzersizligiyle rolu
+    GLOBAL yapan tek satirdi - bir kurumda hakem olan HER kurumda hakemdi.
+    Kullanicinin sordugu senaryo tam olarak buydu: "ben hem TEKNOFEST
+    yarismasi icin hem de odev sonucu kontrolu icin ayni maile bagliysam?"
+    Cevap: ayni kisi A kurumunda hakem, B kurumunda yarismaci olabilmeli.
+
+    User GLOBAL kalir (e-posta tekil), uyelik kuruma baglanir.
+    """
+
     __tablename__ = "user_roles"
-    __table_args__ = (UniqueConstraint("user_id", "role", name="uq_user_role"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "organization_id", "role", name="uq_user_org_role"),
+    )
 
     id = Column(String, primary_key=True, index=True)
     user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # Rolun gecerli oldugu kurum. Gecis suresince nullable; kurum kapisi
+    # devreye girdiginde zorunlu olacak.
+    organization_id = Column(
+        String, ForeignKey("organizations.id"), nullable=True, index=True
+    )
     role = Column(String, nullable=False)
 
     user = relationship("User", back_populates="roles")
+    organization = relationship("Organization")
 
 
 class Organization(Base):

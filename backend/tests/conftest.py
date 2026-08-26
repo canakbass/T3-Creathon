@@ -59,6 +59,33 @@ def db_session():
         Base.metadata.drop_all(bind=engine)
 
 
+@pytest.fixture(scope="function", autouse=True)
+def kurumlar(db_session):
+    """Her test veri tabaninda VARSAYILAN KURUM bulunsun.
+
+    NEDEN AUTOUSE: uygulama acilisindaki seed_db GERCEK veri tabanina
+    yaziyor, testlerin bellek icindeki veri tabanina degil. Bu yuzden
+    testlerde hic Organization kaydi yoktu ve yeni acilan hesaplarin
+    rolleri organization_id=None ile olusuyordu.
+
+    Bugun bu zararsiz (yetki kontrolu hala kuruma bakmiyor) ama kurum
+    kapisi devreye girdiginde her test SESSIZCE "kurumsuz kullanici"
+    uretmeye devam eder ve hepsi 403 alirdi - hata da testin kendisinde
+    degil altyapida olurdu. Tuzagi simdiden kapatiyoruz.
+    """
+    from app import models
+
+    if db_session.query(models.Organization).count() == 0:
+        db_session.add_all([
+            models.Organization(id="org-t3", name="T3 Vakfı", slug="t3-vakfi"),
+            models.Organization(
+                id="org-cbu", name="Manisa Celal Bayar Üniversitesi", slug="cbu"
+            ),
+        ])
+        db_session.commit()
+    return db_session.query(models.Organization).all()
+
+
 @pytest.fixture(scope="function")
 def demo_takim(db_session):
     """Yoneticinin rapor aktarabilmesi icin bir takim.
@@ -74,7 +101,10 @@ def demo_takim(db_session):
     """
     from app import models
 
-    takim = models.Team(id="test-takim", name="Test Takımı", external_ref="KYS-TEST-1")
+    takim = models.Team(
+        id="test-takim", name="Test Takımı", external_ref="KYS-TEST-1",
+        organization_id="org-t3",
+    )
     db_session.add(takim)
     db_session.commit()
     return takim
@@ -91,7 +121,10 @@ def rakip_takim(db_session):
     """
     from app import models
 
-    takim = models.Team(id="rakip-takim", name="Rakip Takım", external_ref="KYS-TEST-2")
+    takim = models.Team(
+        id="rakip-takim", name="Rakip Takım", external_ref="KYS-TEST-2",
+        organization_id="org-t3",
+    )
     db_session.add(takim)
     db_session.commit()
     return takim

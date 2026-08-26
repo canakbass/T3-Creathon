@@ -120,8 +120,15 @@ def seed_db():
                 db.add(db_user)
                 db.flush()
                 for rol in roller:
+                    # Tum seed kullanicilari varsayilan kuruma (T3 Vakfi)
+                    # bagli. Ikinci kurum (CBU) demoda elle uye eklenerek
+                    # kullaniliyor - kurumlar arasi yalitim ancak boyle
+                    # gosterilebilir.
                     db.add(models.UserRole(
-                        id=str(uuid.uuid4()), user_id=db_user.id, role=rol
+                        id=str(uuid.uuid4()),
+                        user_id=db_user.id,
+                        organization_id="org-t3",
+                        role=rol,
                     ))
             db.commit()
 
