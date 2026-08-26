@@ -114,6 +114,48 @@ export async function register(input: RegisterInput): Promise<WireUser> {
   });
 }
 
+export interface CreateUserInput {
+  email: string;
+  fullName?: string | null;
+  roles: string[];
+  teamId?: string | null;
+  teamRole?: string | null;
+}
+
+export interface CreatedUser {
+  id: string;
+  email: string;
+  full_name: string | null;
+  roles: string[];
+  team_id: string | null;
+  /** YALNIZCA bu yanıtta döner; veri tabanında sadece bcrypt özeti var. */
+  temporary_password: string;
+  notice: string;
+}
+
+/**
+ * Yönetici bir kullanıcı hesabı açar; şifreyi SİSTEM üretir.
+ *
+ * NEDEN KENDİ KENDİNE KAYIT YOK: raporun sonucunu TAKIM ÜYELİĞİ belirliyor
+ * ve üyelik e-postaya bağlı. Kayıt açık olsaydı, bir takım üyesinin
+ * e-postasını ilk kaydettiren kişi o takımın sonuçlarını görürdü — e-posta
+ * doğrulaması bunu ÇÖZMEZ, çünkü asıl soru "bu kişi bu kutuya erişiyor mu"
+ * değil, "bu e-posta bu takıma mı ait". O sorunun cevabını yalnızca yönetici
+ * bilir; hesabı onun açması kimliğe kefil olması demek.
+ */
+export async function createUser(input: CreateUserInput): Promise<CreatedUser> {
+  return apiFetch<CreatedUser>("/api/auth/users", {
+    method: "POST",
+    json: {
+      email: input.email,
+      full_name: input.fullName || null,
+      roles: input.roles,
+      team_id: input.teamId ?? null,
+      team_role: input.teamRole ?? null,
+    },
+  });
+}
+
 export async function fetchMe(): Promise<WireUser> {
   return apiFetch<WireUser>("/api/auth/me");
 }

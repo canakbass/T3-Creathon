@@ -349,3 +349,82 @@ def test_baska_takimin_kopyasi_HALA_yakalaniyor(client, sahne):
     assert not any(
         "karşılaştırma dışı" in b for b in benzerlik["findings"]
     ), f"baska takimin raporu da dislandi: {benzerlik['findings']}"
+
+
+# --- Hesap acma: kimlige YONETICI kefil olur -------------------------------
+
+def test_yonetici_hesap_acinca_takim_erisimi_otomatik(client, sahne):
+    """Yonetici hesabi acar, sifreyi SISTEM uretir, uye takimin sonucunu gorur.
+
+    NEDEN BOYLE: raporun sonucunu TAKIM UYELIGI belirliyor ve uyelik
+    e-postaya bagli. Kullanicilar kendi kendine kayit olsaydi, bir takim
+    uyesinin e-postasini ILK KAYDETTIREN kisi o takimin sonuclarini gorurdu -
+    e-posta dogrulamamiz yok. Hesabi yoneticinin acmasi bu bagi guvenilir
+    kiliyor: kimlige yonetici kefil oluyor.
+
+    T3'un mevcut pratigi de bu: "belirlenen mail + uretilmis guvenli sifre,
+    kullaniciya iletiliyor".
+    """
+    r = client.post(
+        "/api/auth/users",
+        json={
+            "email": "Yeni.Uye@Takim.ORG",
+            "full_name": "Yeni Üye",
+            "roles": ["COMPETITOR"],
+            "team_id": "takim-a",
+            "team_role": "uye",
+        },
+        headers=sahne["yonetici"],
+    )
+    assert r.status_code == 201, r.text[:300]
+    d = r.json()
+
+    # E-posta normalize edilmeli - "Yeni.Uye@Takim.ORG" ile giris denemesi
+    # kucuk harfli kayda dusmeli, aksi halde ayni kisi icin iki hesap olusur.
+    assert d["email"] == "yeni.uye@takim.org"
+    assert len(d["temporary_password"]) >= 12
+    assert "YALNIZCA" in d["notice"]
+
+    giris = client.post(
+        "/api/auth/login",
+        data={"username": "yeni.uye@takim.org", "password": d["temporary_password"]},
+    )
+    assert giris.status_code == 200, giris.text[:200]
+    uye = {"Authorization": f"Bearer {giris.json()['access_token']}"}
+
+    # Hicbir sey yuklemedi ama TAKIMIN raporunu goruyor.
+    assert client.get(f"/api/reports/{sahne['rapor_id']}", headers=uye).status_code == 200
+
+
+def test_kendi_kendine_kayit_URUNDE_kapali(client, monkeypatch):
+    """Varsayilan KAPALI olmasi bilincli: yapilandirmayi unutmak guvenligi
+    ARTIRIR, azaltmaz.
+
+    Acik olsaydi herkes kendine REFEREE rolu verip /api/reports/lookup ile
+    her basvurunun kunyesini gorebilirdi.
+    """
+    monkeypatch.setenv("SELF_REGISTRATION", "0")
+    r = client.post(
+        "/api/auth/register",
+        json={"email": "davetsiz@test.org", "password": "parola", "roles": ["REFEREE"]},
+    )
+    assert r.status_code == 403, f"kendi kendine kayit acikti (HTTP {r.status_code})"
+    assert "yonetici" in r.json()["detail"].lower()
+
+
+def test_yarismaci_hesap_acamaz(client, sahne):
+    """Hesap acmak YONETICI isi - aksi halde kefalet zinciri kirilir."""
+    r = client.post(
+        "/api/auth/users",
+        json={"email": "sahte@test.org", "roles": ["COMPETITOR"]},
+        headers=sahne["kaptan"],
+    )
+    assert r.status_code == 403, f"yarismaci hesap acabildi (HTTP {r.status_code})"
+
+
+def test_ayni_eposta_iki_kez_acilamaz(client, sahne):
+    govde = {"email": "tek@test.org", "roles": ["COMPETITOR"]}
+    assert client.post("/api/auth/users", json=govde, headers=sahne["yonetici"]).status_code == 201
+    ikinci = client.post("/api/auth/users", json=govde, headers=sahne["yonetici"])
+    assert ikinci.status_code == 400
+    assert "zaten kayitli" in ikinci.json()["detail"]

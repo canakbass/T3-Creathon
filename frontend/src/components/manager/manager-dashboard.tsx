@@ -1,6 +1,7 @@
 "use client";
 
 import { CompetitionManager } from "./competition-manager";
+import { AccountCreator } from "./account-creator";
 
 export function ManagerDashboard() {
   return (
@@ -14,6 +15,11 @@ export function ManagerDashboard() {
       </div>
 
       <CompetitionManager />
+
+      {/* Kullanicilar kendi kendine kayit OLAMAZ (bkz. account-creator.tsx):
+          raporun sonucunu takim uyeligi belirliyor ve uyelik e-postaya bagli.
+          Hesabi yoneticinin acmasi kimlige kefil olmasi demek. */}
+      <AccountCreator />
     </div>
   );
 }

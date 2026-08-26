@@ -1,5 +1,13 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
+
+# Kendi kendine kayit URUNDE KAPALI (bkz. routes/auth.py). Testlerin cogu
+# kullanici olusturmak icin /register kullaniyor; burada ACIKCA aciyoruz.
+# Varsayilanin kapali olmasi bilincli: yapilandirmayi unutmak guvenligi
+# ARTIRIR, azaltmaz.
+os.environ.setdefault("SELF_REGISTRATION", "1")
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool

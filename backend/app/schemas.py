@@ -22,6 +22,27 @@ class UserCreate(BaseModel):
     # Tekil `role`, tek rol gonderen eski istemciler icin kabul ediliyor.
     role: Optional[str] = None
 
+class AdminUserCreate(BaseModel):
+    """Yoneticinin actigi hesap. Sifre GONDERILMEZ - sistem uretir."""
+    email: EmailStr
+    full_name: Optional[str] = None
+    roles: List[str] = ["COMPETITOR"]
+    # Istege bagli: ayni islemde takima ekle.
+    team_id: Optional[str] = None
+    team_role: Optional[str] = None
+
+
+class CreatedUser(BaseModel):
+    id: str
+    email: EmailStr
+    full_name: Optional[str] = None
+    roles: List[str]
+    team_id: Optional[str] = None
+    # YALNIZCA BU YANITTA doner; veri tabaninda yalnizca bcrypt ozeti var.
+    temporary_password: str
+    notice: str
+
+
 class UserLogin(BaseModel):
     email: EmailStr
     password: str

@@ -63,15 +63,27 @@ c = httpx.Client(base_url=TEMEL, timeout=180)
 EK = uuid.uuid4().hex[:8]
 
 
-def kaydol_giris(rol_listesi, etiket):
+def kaydol_giris(rol_listesi, etiket, acan_basliklar=None):
+    """Hesap acar ve giris yapar.
+
+    Kendi kendine kayit URUNDE KAPALI (bkz. routes/auth.py): raporun sonucunu
+    takim uyeligi belirliyor ve uyelik e-postaya bagli; kayit acik olsaydi bir
+    takim uyesinin e-postasini ilk kaydettiren kisi o takimin sonuclarini
+    gorurdu. Bu yuzden hesaplari YONETICI aciyor ve sifreyi SISTEM uretiyor -
+    T3'un mevcut pratigi de bu.
+
+    Ilk yonetici seed'den geliyor (manager@teknofest.org); ondan sonraki tum
+    hesaplar onun uzerinden aciliyor.
+    """
     eposta = f"e2e_{etiket}_{EK}@test.org"
-    c.post(
-        "/api/auth/register",
-        json={"email": eposta, "password": "parola123", "roles": rol_listesi},
+    r = c.post(
+        "/api/auth/users",
+        json={"email": eposta, "roles": rol_listesi},
+        headers=acan_basliklar,
     )
-    j = c.post(
-        "/api/auth/login", data={"username": eposta, "password": "parola123"}
-    ).json()
+    assert r.status_code == 201, f"hesap acilamadi: {r.text[:200]}"
+    sifre = r.json()["temporary_password"]
+    j = c.post("/api/auth/login", data={"username": eposta, "password": sifre}).json()
     tok = {"Authorization": f"Bearer {j['access_token']}"}
     return eposta, j, tok
 
@@ -105,9 +117,22 @@ def main():
 
     # ---------------------------------------------------------------- roller
     bolum("Kimlik ve roller")
-    _, yon_giris, _ = kaydol_giris(["COMPETITION_MANAGER"], "yonetici")
-    yonetici = rol_sec(yon_giris, "COMPETITION_MANAGER")
+    # Ilk yonetici SEED'den geliyor - kendi kendine kayit kapali oldugu icin
+    # bir yerden baslamak gerekiyor.
+    yon_giris = c.post(
+        "/api/auth/login",
+        data={"username": "manager@teknofest.org", "password": "password123"},
+    ).json()
+    yonetici = {"Authorization": f"Bearer {yon_giris['access_token']}"}
     kontrol("yonetici girisi", yon_giris.get("active_role") == "COMPETITION_MANAGER")
+    kontrol(
+        "kendi kendine kayit KAPALI",
+        c.post(
+            "/api/auth/register",
+            json={"email": "davetsiz@test.org", "password": "p", "roles": ["REFEREE"]},
+        ).status_code
+        == 403,
+    )
 
     # Yarismaci taraflari SEED'lenmis takim uyeleri.
     #
@@ -127,14 +152,16 @@ def main():
     takim_arkadasi = _giris("competitor@teknofest.org")  # glieser + adyu
     rakip = _giris("rakip@teknofest.org")             # team-zebot
 
-    hakem1_eposta, h1_giris, _ = kaydol_giris(["REFEREE"], "hakem1")
+    hakem1_eposta, h1_giris, _ = kaydol_giris(["REFEREE"], "hakem1", yonetici)
     hakem1 = rol_sec(h1_giris, "REFEREE")
-    hakem2_eposta, h2_giris, _ = kaydol_giris(["REFEREE"], "hakem2")
+    hakem2_eposta, h2_giris, _ = kaydol_giris(["REFEREE"], "hakem2", yonetici)
     hakem2 = rol_sec(h2_giris, "REFEREE")
 
     # Cok rollu hesap: rol secmeden hicbir sey goremez.
     _, cok_giris, cok_tok = kaydol_giris(
-        ["COMPETITOR", "REFEREE", "COMPETITION_MANAGER", "EVALUATION_MANAGER"], "cok"
+        ["COMPETITOR", "REFEREE", "COMPETITION_MANAGER", "EVALUATION_MANAGER"],
+        "cok",
+        yonetici,
     )
     kontrol("cok rollu hesapta otomatik rol atanmiyor", cok_giris.get("active_role") is None)
     kontrol(

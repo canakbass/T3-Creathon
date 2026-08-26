@@ -1,3 +1,5 @@
+import os
+import secrets
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -7,6 +9,33 @@ from ..database import get_db
 from .. import models, schemas, auth
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+
+# KENDI KENDINE KAYIT VARSAYILAN OLARAK KAPALI.
+#
+# NEDEN: bir raporun sonucunu TAKIM UYELIGI belirliyor ve uyelik e-postaya
+# bagli. Kayit acik olsaydi, bir takim uyesinin e-postasini ILK KAYDETTIREN
+# kisi o takimin sonuclarini gorurdu - e-posta dogrulamamiz yok. Ayni sekilde
+# herkes kendine REFEREE rolu verip /api/reports/lookup ile her basvurunun
+# kunyesini gorebilirdi.
+#
+# T3'un mevcut pratigi de bu: hesaplar "belirlenen mail + uretilmis guvenli
+# sifre" seklinde aciliyor ve sifre kullaniciya iletiliyor (BGYS gibi diger
+# sistemlerini de boyle entegre etmisler). Bizde karsiligi
+# POST /api/auth/users - yalnizca yonetici cagirabiliyor.
+#
+# Varsayilan KAPALI olmasi bilincli: yapilandirmayi unutmak GUVENLIGI
+# ARTIRIR, azaltmaz. Testler bu degiskeni acikca aciyor (bkz. conftest.py).
+def _kendi_kaydi_acik() -> bool:
+    return os.getenv("SELF_REGISTRATION", "0").strip().lower() in ("1", "true", "evet")
+
+
+def _uret_sifre() -> str:
+    """Kriptografik olarak guvenli, okunabilir gecici sifre.
+
+    `secrets` kullaniliyor - `random` DEGIL: random tahmin edilebilir bir
+    PRNG ve parola uretiminde kullanilmasi acik bir zafiyettir.
+    """
+    return secrets.token_urlsafe(12)
 
 
 def _rol_ver(db: Session, user: models.User, roller) -> None:
@@ -23,11 +52,24 @@ def _rol_ver(db: Session, user: models.User, roller) -> None:
     "/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED
 )
 def register(user_in: schemas.UserCreate, db: Session = Depends(get_db)):
-    """Yeni kullanici kaydi.
+    """Yeni kullanici kaydi - VARSAYILAN OLARAK KAPALI.
+
+    Acmak icin SELF_REGISTRATION=1. Kapali olmasinin gerekcesi icin
+    yukaridaki _kendi_kaydi_acik notuna bakin; hesaplari yonetici acar
+    (POST /api/auth/users).
 
     `roles` listesi verilebilir (bir kullanicinin birden fazla rolu olabilir).
     Geriye donuk uyumluluk icin tekil `role` alani da kabul ediliyor.
     """
+    if not _kendi_kaydi_acik():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Kendi kendine kayit kapali. Hesabinizi yarisma yoneticisi "
+                "acar ve giris bilgileri size iletilir."
+            ),
+        )
+
     existing_user = db.query(models.User).filter(models.User.email == user_in.email).first()
     if existing_user:
         raise HTTPException(
@@ -64,6 +106,88 @@ def register(user_in: schemas.UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_user)
     return _kullanici_yaniti(db_user)
+
+
+@router.post(
+    "/users", response_model=schemas.CreatedUser, status_code=status.HTTP_201_CREATED
+)
+def create_user(
+    govde: schemas.AdminUserCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(
+        auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+    ),
+):
+    """Yonetici bir kullanici hesabi acar; sifreyi SISTEM uretir.
+
+    NEDEN BOYLE: raporun sonucunu TAKIM UYELIGI belirliyor ve uyelik
+    e-postaya bagli. Kullanicilar kendi kendine kayit olsaydi, bir takim
+    uyesinin e-postasini ilk kaydettiren kisi o takimin sonuclarini gorurdu -
+    e-posta dogrulamamiz yok. Hesabi yoneticinin acmasi bu bagi guvenilir
+    kiliyor: kimlige yonetici kefil oluyor.
+
+    T3'un mevcut pratigi de bu ("belirlenen mail + uretilmis guvenli sifre,
+    kullaniciya iletiliyor").
+
+    Sifre YALNIZCA BU YANITTA doner ve veri tabaninda yalnizca bcrypt ozeti
+    saklanir - bir daha okunamaz. Kaybolursa yeni hesap degil, sifre
+    sifirlama gerekir.
+    """
+    eposta = govde.email.strip().lower()
+    if db.query(models.User).filter(models.User.email == eposta).first():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bu e-posta adresi zaten kayitli.",
+        )
+
+    gecersiz = [r for r in govde.roles if r not in models.ROLLER]
+    if gecersiz:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Gecersiz rol: {', '.join(gecersiz)}.",
+        )
+
+    sifre = _uret_sifre()
+    kullanici = models.User(
+        id=str(uuid.uuid4()),
+        email=eposta,
+        password_hash=auth.hash_password(sifre),
+        full_name=govde.full_name,
+    )
+    db.add(kullanici)
+    db.flush()
+    _rol_ver(db, kullanici, govde.roles)
+
+    # Istege bagli: ayni islemde takima ekle. Yonetici "hesabi ac + takima
+    # ekle"yi iki ayri adimda yapmak zorunda kalmasin; iki adimin arasinda
+    # unutulan bir uye, sonucunu hic goremeyen bir yarismaci demek.
+    if govde.team_id:
+        takim = db.query(models.Team).filter(models.Team.id == govde.team_id).first()
+        if not takim:
+            raise HTTPException(status_code=404, detail="Takim bulunamadi.")
+        db.add(
+            models.TeamMember(
+                id=str(uuid.uuid4()),
+                team_id=takim.id,
+                user_id=kullanici.id,
+                role=govde.team_role or "uye",
+            )
+        )
+
+    db.commit()
+    db.refresh(kullanici)
+    return {
+        "id": kullanici.id,
+        "email": kullanici.email,
+        "full_name": kullanici.full_name,
+        "roles": kullanici.role_list,
+        "team_id": govde.team_id,
+        "temporary_password": sifre,
+        "notice": (
+            "Bu sifre YALNIZCA BURADA gorunuyor; veri tabaninda yalnizca "
+            "ozeti saklaniyor. Kullaniciya guvenli bir kanaldan iletin."
+        ),
+    }
 
 
 @router.post("/login", response_model=schemas.LoginResponse)
