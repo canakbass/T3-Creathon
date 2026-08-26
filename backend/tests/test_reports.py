@@ -45,7 +45,7 @@ def _ata(client, yonetici_headers, report_id, hakem_email):
     return hakem_id
 
 
-def test_report_lifecycle(client):
+def test_report_lifecycle(client, demo_takim):
     # 1. Register users (competitor & referee)
     client.post(
         "/api/auth/register",
@@ -89,13 +89,19 @@ def test_report_lifecycle(client):
     )
     assert crit_res.status_code == 201
 
-    # 3. Upload a report
+    # 3. Raporu YONETICI aktarir (sartname AKIS 01: "raporlari sisteme
+    #    aktarir"). Yarismacinin yukleme yetkisi YOK - AKIS 03'te yukleme
+    #    adimi bulunmuyor.
     file_data = io.BytesIO(b"%PDF-1.4 Mock PDF Content")
     upload_res = client.post(
         "/api/reports/upload",
-        data={"project_name": "Autonomous Drone V1", "category_id": cat_id},
+        data={
+            "project_name": "Autonomous Drone V1",
+            "category_id": cat_id,
+            "team_id": demo_takim.id,
+        },
         files={"file": ("drone_report.pdf", file_data, "application/pdf")},
-        headers={"Authorization": f"Bearer {comp_token}"}
+        headers={"Authorization": f"Bearer {manager_token}"}
     )
     
     assert upload_res.status_code == 201

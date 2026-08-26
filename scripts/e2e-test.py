@@ -17,6 +17,7 @@ Cikis kodu 0 ise her sey gecti. Betik veri tabanina yaziyor; temiz bir
 sonuc icin once backend/sql_app.db silinip sunucu yeniden baslatilabilir.
 """
 
+import io
 import os
 import sys
 import time
@@ -186,15 +187,31 @@ def main():
     kontrol("tanimlar tamamlaninca basvuru aciliyor", r.status_code == 200, r.text[:80])
 
     # ------------------------------------------------------------ yukleme
-    bolum("Yarismaci basvurusu ve AI analizi")
+    bolum("Rapor aktarimi ve AI analizi")
+
+    # Sartname AKIS 03'te yarismacinin YUKLEME ADIMI YOK; yukleme AKIS 01'de
+    # yoneticide ("raporlari sisteme aktarir").
     with open(ORNEK_RAPORLAR[0], "rb") as f:
-        yukleme = c.post(
+        yasak = c.post(
             "/api/reports/upload",
-            data={"project_name": "E2E Projesi", "competition_id": yar_id},
+            data={"project_name": "Olmamali", "competition_id": yar_id, "team_id": TAKIM},
             files={"file": (ORNEK_RAPORLAR[0].name, f, "application/pdf")},
             headers=yarismaci,
         )
-    kontrol("yarismaci rapor yukleyebiliyor", yukleme.status_code == 201, yukleme.text[:120])
+    kontrol(
+        "YARISMACI rapor yukleyemiyor",
+        yasak.status_code == 403,
+        f"HTTP {yasak.status_code}",
+    )
+
+    with open(ORNEK_RAPORLAR[0], "rb") as f:
+        yukleme = c.post(
+            "/api/reports/upload",
+            data={"project_name": "E2E Projesi", "competition_id": yar_id, "team_id": TAKIM},
+            files={"file": (ORNEK_RAPORLAR[0].name, f, "application/pdf")},
+            headers=yonetici,
+        )
+    kontrol("yonetici rapor aktarabiliyor", yukleme.status_code == 201, yukleme.text[:120])
     rapor_id = yukleme.json()["id"]
     kontrol("yukleme hemen 'pending' donuyor", yukleme.json()["status"] == "pending")
 
@@ -310,17 +327,15 @@ def main():
         sahipsiz.status_code == 400,
         f"HTTP {sahipsiz.status_code}",
     )
-    with open(ORNEK_RAPORLAR[2], "rb") as f:
-        cift = c.post(
-            "/api/reports/upload",
-            data={"project_name": "Belirsiz", "competition_id": yar_id},
-            files={"file": (ORNEK_RAPORLAR[2].name, f, "application/pdf")},
-            headers=takim_arkadasi,
-        )
     kontrol(
-        "iki takimli yarismaci TAKIM SECMEK zorunda",
-        cift.status_code == 400,
-        f"HTTP {cift.status_code}",
+        "takim arkadasi da yukleyemiyor (rol degil, akis geregi)",
+        c.post(
+            "/api/reports/upload",
+            data={"project_name": "Olmamali", "competition_id": yar_id, "team_id": TAKIM},
+            files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
+            headers=takim_arkadasi,
+        ).status_code
+        == 403,
     )
 
     # ------------------------------------------------------------- karar
@@ -397,17 +412,21 @@ def main():
     # Yarisma kapandiktan sonra YARISMACI yukleyememeli. (Yonetici,
     # test/duzeltme amaciyla her asamada yukleyebiliyor - bilincli istisna,
     # bkz. routes/reports.py upload_report.)
+    # NOT: "kapali yarismaya yarismaci yukleyemez" kontrolu KALDIRILDI -
+    # yarismaci artik HICBIR asamada yukleyemiyor, o yuzden asamaya bagli
+    # bir kural kalmadi. Yoneticiye asama kisiti bilincli olarak YOK: gercek
+    # akista raporlar basvuru kapandiktan SONRA toplu aktariliyor.
     with open(ORNEK_RAPORLAR[1], "rb") as f:
-        gec_kalan = c.post(
+        kapali_aktarim = c.post(
             "/api/reports/upload",
-            data={"project_name": "Gec Kalan", "competition_id": yar_id},
+            data={"project_name": "Kapali Asama", "competition_id": yar_id, "team_id": TAKIM},
             files={"file": (ORNEK_RAPORLAR[1].name, f, "application/pdf")},
-            headers=yarismaci,
+            headers=yonetici,
         )
     kontrol(
-        "kapali yarismaya YARISMACI yukleyemiyor",
-        gec_kalan.status_code == 400,
-        f"HTTP {gec_kalan.status_code}",
+        "yonetici KAPALI asamada da aktarabiliyor",
+        kapali_aktarim.status_code == 201,
+        f"HTTP {kapali_aktarim.status_code}",
     )
 
     # ------------------------------------------------------- yarismaci gorunumu

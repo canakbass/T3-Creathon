@@ -1,7 +1,7 @@
 import { DashboardShell } from "@/components/dashboard-shell";
 import { RoleGuard } from "@/components/role-guard";
 import { CompetitorReportContainer } from "@/components/competitor/competitor-report-container";
-import { CompetitorSubmission } from "@/components/competitor/competitor-submission";
+import { CompetitorSubmissionsInfo } from "@/components/competitor/competitor-submissions-info";
 
 export default function CompetitorDashboardPage() {
   return (
@@ -11,7 +11,11 @@ export default function CompetitorDashboardPage() {
           {/* Sonuç önce: yarışmacının ilk merak ettiği şey bu. Hakem
               kararı verilmediyse bu bölüm "henüz sonuç yok" gösteriyor. */}
           <CompetitorReportContainer />
-          <CompetitorSubmission />
+          {/* Yukleme YOK - sartname AKIS 03'te yarismacinin yukleme adimi
+              yok; yukleme AKIS 01'de yoneticide ("raporlari sisteme
+              aktarir"). Panel bilgi amacli duruyor ki yarismaci "neden
+              yukleyemiyorum" diye aramasin. */}
+          <CompetitorSubmissionsInfo />
         </div>
       </DashboardShell>
     </RoleGuard>

@@ -80,12 +80,16 @@ def sahne(client, db_session):
     )
     client.put(f"/api/competitions/{yar}/status", json={"status": "open"}, headers=yonetici)
 
-    rid = client.post(
+    # Raporu YONETICI aktariyor (sartname AKIS 01) - yarismacinin yukleme
+    # yetkisi yok.
+    yukleme = client.post(
         "/api/reports/upload",
         data={"project_name": "Glieser KTR", "competition_id": yar, "team_id": "tkm"},
         files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=yarismaci,
-    ).json()["id"]
+        headers=yonetici,
+    )
+    assert yukleme.status_code == 201, yukleme.text[:200]
+    rid = yukleme.json()["id"]
 
     hakemler = client.get("/api/assignments/referees", headers=yonetici).json()
     atanan_id = next(h["id"] for h in hakemler if h["email"] == "atanan@t.org")
@@ -293,12 +297,14 @@ def _hakem_ekle(client, sahne, eposta):
 
 
 def _rapor_ekle(client, sahne, ad):
-    return client.post(
+    r = client.post(
         "/api/reports/upload",
         data={"project_name": ad, "competition_id": sahne["yar_id"], "team_id": "tkm"},
         files={"file": (f"{ad}.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=sahne["yarismaci"],
-    ).json()["id"]
+        headers=sahne["yonetici"],
+    )
+    assert r.status_code == 201, r.text[:200]
+    return r.json()["id"]
 
 
 def test_havuz_elle_secilebiliyor(client, sahne):

@@ -28,6 +28,7 @@ kotudur - hakem hicbir raporu goremezse sistem kullanilamaz.
 """
 
 import io
+import uuid
 
 import pytest
 
@@ -42,7 +43,7 @@ def _kaydol_ve_giris(client, email, rol, sifre="password"):
 
 
 @pytest.fixture
-def senaryo(client):
+def senaryo(client, db_session):
     """Bir rapor, iki hakem: biri atanmis, digeri atanmamis.
 
     Atanmamis hakem bu senaryonun saldirganidir; gecerli bir hesabi ve
@@ -61,11 +62,38 @@ def senaryo(client):
     assert kat.status_code == 201
     kat_id = kat.json()["id"]
 
+    # Rapor YONETICI tarafindan, YARISMACININ TAKIMI adina aktariliyor.
+    # Yarismacinin yukleme yetkisi yok (sartname AKIS 03'te yukleme adimi
+    # yok); erisimi takim uyeliginden geliyor.
+    from app import models
+
+    yarismaci_id = (
+        db_session.query(models.User)
+        .filter(models.User.email == "yarismaci@test.org")
+        .first()
+        .id
+    )
+    db_session.add(models.Team(id="senaryo-takim", name="Senaryo Takımı"))
+    db_session.flush()
+    db_session.add(
+        models.TeamMember(
+            id=str(uuid.uuid4()),
+            team_id="senaryo-takim",
+            user_id=yarismaci_id,
+            role="kaptan",
+        )
+    )
+    db_session.commit()
+
     yukleme = client.post(
         "/api/reports/upload",
-        data={"project_name": "Gizli Proje", "category_id": kat_id},
+        data={
+            "project_name": "Gizli Proje",
+            "category_id": kat_id,
+            "team_id": "senaryo-takim",
+        },
         files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=yarismaci,
+        headers=yonetici,
     )
     assert yukleme.status_code == 201
     rapor_id = yukleme.json()["id"]

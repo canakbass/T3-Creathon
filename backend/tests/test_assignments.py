@@ -11,6 +11,7 @@ onayliyordu. Uc adimin ucu de HTTP 200 donuyordu.
 """
 
 import io
+import uuid
 
 import pytest
 
@@ -37,7 +38,7 @@ def _rolle(giris, client, rol):
 
 
 @pytest.fixture
-def yarisma(client):
+def yarisma(client, db_session):
     """Yonetici + bir yarisma + cift rollu (yarismaci VE hakem) bir hesap."""
     yon_giris = _kaydol_ve_giris(client, "yon@test.org", ["COMPETITION_MANAGER"])
     yonetici = _rolle(yon_giris, client, "COMPETITION_MANAGER")
@@ -74,11 +75,39 @@ def yarisma(client):
     cift_giris = _kaydol_ve_giris(client, "cift@test.org", ["COMPETITOR", "REFEREE"])
     cift_yarismaci = _rolle(cift_giris, client, "COMPETITOR")
 
+    # Rapor YONETICI tarafindan, CIFT ROLLU hesabin takimi adina aktariliyor.
+    # Cikar catismasi senaryosu icin kritik: raporu yukleyen yonetici, ama
+    # sahibi o hesabin takimi - yani `submitted_by_id` kontrolu bosa duser ve
+    # yalnizca TAKIM kontrolu koruyabilir.
+    from app import models
+
+    cift_kullanici_id = (
+        db_session.query(models.User)
+        .filter(models.User.email == "cift@test.org")
+        .first()
+        .id
+    )
+    db_session.add(models.Team(id="cift-takim", name="Çift Rollü Takım"))
+    db_session.flush()
+    db_session.add(
+        models.TeamMember(
+            id=str(uuid.uuid4()),
+            team_id="cift-takim",
+            user_id=cift_kullanici_id,
+            role="kaptan",
+        )
+    )
+    db_session.commit()
+
     yukleme = client.post(
         "/api/reports/upload",
-        data={"project_name": "Kendi Raporum", "competition_id": yar_id},
+        data={
+            "project_name": "Kendi Raporum",
+            "competition_id": yar_id,
+            "team_id": "cift-takim",
+        },
         files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=cift_yarismaci,
+        headers=yonetici,
     )
     assert yukleme.status_code == 201, yukleme.text[:200]
 

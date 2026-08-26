@@ -33,7 +33,9 @@ def _kaydol_ve_giris(client, email, roller, sifre="password"):
 
 
 @pytest.fixture
-def kurulum(client):
+def kurulum(client, db_session):
+    from app import models
+
     yonetici = _kaydol_ve_giris(client, "yy@test.org", ["COMPETITION_MANAGER"])
     kat_id = client.post(
         "/api/categories",
@@ -45,7 +47,18 @@ def kurulum(client):
         json={"name": "Test Yarismasi", "category_id": kat_id},
         headers=yonetici,
     ).json()["id"]
-    return {"yonetici": yonetici, "kat_id": kat_id, "yar_id": yar_id}
+    # Rapor aktariminda team_id ZORUNLU (sahipsiz rapor olusmasin). Takim
+    # CRUD ucu yok - gercek kayitlar KYS'de tutuluyor - bu yuzden testlerde
+    # dogrudan veri tabanina yaziyoruz.
+    db_session.add(models.Team(id="kur-takim", name="Test Takımı", external_ref="KYS-K1"))
+    db_session.commit()
+
+    return {
+        "yonetici": yonetici,
+        "kat_id": kat_id,
+        "yar_id": yar_id,
+        "takim_id": "kur-takim",
+    }
 
 
 # --- Kriter agirliklari ---------------------------------------------------
@@ -169,14 +182,8 @@ def test_karar_verilmisse_asama_geri_alinamaz(kurulum, client):
     yid = kurulum["yar_id"]
     client.put(f"/api/competitions/{yid}/status", json={"status": "open"}, headers=ynt)
 
-    yarismaci = _kaydol_ve_giris(client, "y1@test.org", ["COMPETITOR"])
     hakem = _kaydol_ve_giris(client, "h1@test.org", ["REFEREE"])
-    rapor_id = client.post(
-        "/api/reports/upload",
-        data={"project_name": "Proje", "competition_id": yid},
-        files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=yarismaci,
-    ).json()["id"]
+    rapor_id = _rapor_yukle_ve_analiz_et(client, kurulum)
 
     hakemler = client.get("/api/assignments/referees", headers=ynt).json()
     hakem_id = next(h["id"] for h in hakemler if h["email"] == "h1@test.org")
@@ -218,14 +225,8 @@ def test_gorevli_olmayan_hakeme_atama_yapilamaz(kurulum, client):
     yid = kurulum["yar_id"]
     client.put(f"/api/competitions/{yid}/status", json={"status": "open"}, headers=ynt)
 
-    yarismaci = _kaydol_ve_giris(client, "y2@test.org", ["COMPETITOR"])
     _kaydol_ve_giris(client, "disarki@test.org", ["REFEREE"])
-    rapor_id = client.post(
-        "/api/reports/upload",
-        data={"project_name": "Proje", "competition_id": yid},
-        files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=yarismaci,
-    ).json()["id"]
+    rapor_id = _rapor_yukle_ve_analiz_et(client, kurulum)
 
     hakemler = client.get("/api/assignments/referees", headers=ynt).json()
     disarki_id = next(h["id"] for h in hakemler if h["email"] == "disarki@test.org")
@@ -254,14 +255,8 @@ def test_karar_verilmis_raporun_atamasi_silinemez(kurulum, client):
     yid = kurulum["yar_id"]
     client.put(f"/api/competitions/{yid}/status", json={"status": "open"}, headers=ynt)
 
-    yarismaci = _kaydol_ve_giris(client, "y3@test.org", ["COMPETITOR"])
     hakem = _kaydol_ve_giris(client, "h3@test.org", ["REFEREE"])
-    rapor_id = client.post(
-        "/api/reports/upload",
-        data={"project_name": "Proje", "competition_id": yid},
-        files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=yarismaci,
-    ).json()["id"]
+    rapor_id = _rapor_yukle_ve_analiz_et(client, kurulum)
     hakemler = client.get("/api/assignments/referees", headers=ynt).json()
     hakem_id = next(h["id"] for h in hakemler if h["email"] == "h3@test.org")
     client.post(
@@ -290,12 +285,17 @@ def test_karar_verilmis_raporun_atamasi_silinemez(kurulum, client):
 
 # --- Kurallar analiz sonrasi degistirilirse -------------------------------
 
-def _rapor_yukle_ve_analiz_et(client, kurulum, yarismaci, ad="Proje"):
+def _rapor_yukle_ve_analiz_et(client, kurulum, _yoksayilan=None, ad="Proje"):
+    """Raporu YONETICI aktarir (sartname AKIS 01); yarismacinin yetkisi yok."""
     r = client.post(
         "/api/reports/upload",
-        data={"project_name": ad, "competition_id": kurulum["yar_id"]},
+        data={
+            "project_name": ad,
+            "competition_id": kurulum["yar_id"],
+            "team_id": kurulum["takim_id"],
+        },
         files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=yarismaci,
+        headers=kurulum["yonetici"],
     )
     assert r.status_code == 201, r.text[:200]
     return r.json()["id"]
@@ -315,8 +315,7 @@ def test_analiz_sonrasi_kriter_degisimi_onay_ister(kurulum, client):
     client.put(
         f"/api/competitions/{kurulum['yar_id']}/status", json={"status": "open"}, headers=ynt
     )
-    yarismaci = _kaydol_ve_giris(client, "yk1@test.org", ["COMPETITOR"])
-    _rapor_yukle_ve_analiz_et(client, kurulum, yarismaci)
+    _rapor_yukle_ve_analiz_et(client, kurulum)
 
     yeni = {"criteria": [{"title": "Kaynakça", "weight": 100}]}
     r = client.put(
@@ -343,9 +342,8 @@ def test_karar_verilmisse_kriterler_onayla_bile_degismez(kurulum, client):
     yid = kurulum["yar_id"]
     client.put(f"/api/competitions/{yid}/status", json={"status": "open"}, headers=ynt)
 
-    yarismaci = _kaydol_ve_giris(client, "yk2@test.org", ["COMPETITOR"])
     hakem = _kaydol_ve_giris(client, "hk2@test.org", ["REFEREE"])
-    rapor_id = _rapor_yukle_ve_analiz_et(client, kurulum, yarismaci)
+    rapor_id = _rapor_yukle_ve_analiz_et(client, kurulum)
 
     hakemler = client.get("/api/assignments/referees", headers=ynt).json()
     hakem_id = next(h["id"] for h in hakemler if h["email"] == "hk2@test.org")

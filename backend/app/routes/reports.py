@@ -332,13 +332,27 @@ async def upload_report(
     team_id: str = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.RoleChecker(["COMPETITION_MANAGER", "COMPETITOR"]))
+    current_user: models.User = Depends(
+        auth.RoleChecker(["COMPETITION_MANAGER", "EVALUATION_MANAGER"])
+    )
 ):
-    """Rapor yukler ve AI analizini arka planda baslatir.
+    """Raporu SISTEME AKTARIR ve AI analizini arka planda baslatir.
+
+    YALNIZCA YONETICI AKTARABILIR. Yarismacinin yukleme yetkisi KALDIRILDI.
+
+    NEDEN: sartname AKIS 01 (Yarisma Yoneticisi) "raporlari sisteme aktarir"
+    diyor; AKIS 03 (Yarismaci) ise "Degerlendirme tamamlanir -> sonucunu
+    goruntuler -> guclu ve gelisime acik yonlerini inceler -> onerileri
+    gorur" - yani yarismaci akisinda YUKLEME ADIMI YOK. Yarismaci sistemde
+    yalnizca SONUC GORUNTULEYEN taraf.
+
+    Gercek hayatta da boyle: raporlar TEKNOFEST'in kendi sistemine
+    (KYS / t3kys.com) teslim ediliyor, buraya degil. Bizim sistem o raporlari
+    degerlendiren yardimci katman; toplama noktasi degil.
 
     `competition_id` verilirse yarismanin asamasi kontrol edilir ve kategori
-    yarismadan alinir - yarismacinin kategori secmesine gerek kalmaz.
-    Yarisma verilmezse eski davranis (kategori dogrudan secilir) surdurulur.
+    yarismadan alinir. Rapor hangi TAKIMA ait oldugu `team_id` ile
+    belirtilir - sonucu kimin gorecegi buradan cikiyor.
     """
     competition = None
     if competition_id:
@@ -348,18 +362,17 @@ async def upload_report(
         if not competition:
             raise HTTPException(status_code=404, detail="Yarisma bulunamadi.")
 
-        # Yarismacinin rapor yukleyebilmesi yarismanin ASAMASINA bagli.
-        # Yonetici test/duzeltme amaciyla her asamada yukleyebilir.
-        aktif = getattr(current_user, "active_role", None)
-        if aktif == "COMPETITOR" and competition.status not in ("open",):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"'{competition.name}' yarismasina su anda basvuru "
-                    f"yapilamiyor (asama: {competition.status})."
-                ),
-            )
-        # Kategori yarismadan geliyor - yarismacinin ayrica secmesine gerek yok.
+        # ASAMA KONTROLU YOK - bilincli.
+        #
+        # Onceden yalnizca COMPETITOR icin "yarisma 'open' degilse yukleyemez"
+        # kurali vardi; yarismaci artik hic yukleyemedigi icin o dal olu kod
+        # oldu. Yoneticiye asama kisiti KOYMUYORUZ: gercek akista raporlar
+        # basvuru kapandiktan SONRA toplu aktariliyor (KYS'den gelen dosyalar
+        # elden gecirilip sisteme yukleniyor), yani 'closed' asamasinda
+        # aktarim NORMAL durum. Kisit koymak, sistemin asil kullanim seklini
+        # engellerdi.
+        #
+        # Kategori yarismadan geliyor - ayrica secilmesine gerek yok.
         category_id = competition.category_id
 
     if not category_id:
@@ -375,50 +388,23 @@ async def upload_report(
     # DEGILDIR. Onceden sonucu kimin gordugu yukleyene bakiyordu; sonuc olarak
     # yoneticinin aktardigi bir raporun sonucunu HICBIR yarismaci goremiyordu.
     # Sahiplik artik takimdan geliyor.
-    aktif_rol = getattr(current_user, "active_role", None)
-    takim = None
-    if team_id:
-        takim = db.query(models.Team).filter(models.Team.id == team_id).first()
-        if not takim:
-            raise HTTPException(status_code=404, detail="Takim bulunamadi.")
-        # Yarismaci baskasinin takimi adina rapor yukleyemez.
-        if aktif_rol == "COMPETITOR" and current_user.id not in takim.member_ids:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Yalnizca uyesi oldugunuz bir takim adina rapor yukleyebilirsiniz.",
-            )
-    elif aktif_rol == "COMPETITOR":
-        # Yarismaci takim belirtmediyse: tek takimi varsa ona bagliyoruz,
-        # birden fazlaysa SECMESI gerekiyor - yanlis takima yazmak, raporu
-        # yanlis kisilere gostermek demek.
-        uyelikler = (
-            db.query(models.TeamMember)
-            .filter(models.TeamMember.user_id == current_user.id)
-            .all()
-        )
-        if len(uyelikler) == 1:
-            takim = db.query(models.Team).filter(
-                models.Team.id == uyelikler[0].team_id
-            ).first()
-        elif len(uyelikler) > 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Birden fazla takimda yer aliyorsunuz; raporu hangi takim "
-                    "adina yukledginizi secin (team_id)."
-                ),
-            )
-    elif aktif_rol in ("COMPETITION_MANAGER", "EVALUATION_MANAGER"):
-        # Yonetici aktariminda takim ZORUNLU. Aksi halde rapor sahipsiz kalir
-        # ve sonucu hicbir yarismaci goremez - sartname AKIS 03 ("yarismaci
-        # sonucunu goruntuler") karsilanmaz.
+    # --- Raporun SAHIBI takim -------------------------------------------
+    #
+    # team_id ZORUNLU. Sahipsiz bir rapor sisteme girer, analiz edilir, hakem
+    # karar verir ve sonucunu HICBIR yarismaci goremez - sartname AKIS 03
+    # ("yarismaci sonucunu goruntuler") karsilanmaz. Bu yuzden aktarim
+    # sirasinda takim belirtilmek zorunda.
+    if not team_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Rapor hangi takima ait? Yonetici aktariminda team_id zorunlu - "
-                "aksi halde raporun sonucunu hicbir yarismaci goremez."
+                "Rapor hangi takima ait? Aktarimda team_id zorunlu - aksi "
+                "halde raporun sonucunu hicbir yarismaci goremez."
             ),
         )
+    takim = db.query(models.Team).filter(models.Team.id == team_id).first()
+    if not takim:
+        raise HTTPException(status_code=404, detail="Takim bulunamadi.")
 
     category = db.query(models.Category).filter(models.Category.id == category_id).first()
     if not category:

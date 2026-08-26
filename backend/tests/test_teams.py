@@ -175,55 +175,33 @@ def test_baska_takim_goremiyor(client, sahne):
     assert client.get("/api/reports", headers=sahne["rakip"]).json() == []
 
 
-def test_baskasinin_takimi_adina_yuklenemez(client, sahne):
-    r = client.post(
-        "/api/reports/upload",
-        data={
-            "project_name": "Sahte",
-            "competition_id": sahne["yar_id"],
-            "team_id": "takim-a",
-        },
-        files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=sahne["rakip"],
-    )
-    assert r.status_code == 403, f"baskasinin takimi adina yukledi (HTTP {r.status_code})"
+def test_yarismaci_RAPOR_YUKLEYEMEZ(client, sahne):
+    """Sartname AKIS 03'te yarismacinin YUKLEME ADIMI YOK.
 
+    AKIS 03 (Yarismaci): "Degerlendirme tamamlanir -> sonucunu goruntuler ->
+    guclu ve gelisime acik yonlerini inceler -> onerileri gorur."
+    AKIS 01 (Yarisma Yoneticisi): "...raporlari sisteme aktarir..."
 
-def test_iki_takimli_yarismaci_takim_secmek_zorunda(client, db_session, sahne):
-    """Yanlis takima yazmak, raporu YANLIS KISILERE gostermek demek -
-    bu yuzden belirsizlikte tahmin etmiyoruz, secim istiyoruz."""
-    from app import models
+    Yarismaci bu sistemde yalnizca SONUC GORUNTULEYEN taraf. Gercek hayatta
+    da raporlar TEKNOFEST'in kendi sistemine (KYS) teslim ediliyor; bizim
+    sistem o raporlari degerlendiren yardimci katman, toplama noktasi degil.
 
-    db_session.add(
-        models.TeamMember(
-            id=str(uuid.uuid4()),
-            team_id="takim-b",
-            user_id=_kullanici_id(db_session, "kaptan@test.org"),
-            role="uye",
+    Onceden yarismaci kendi raporunu yukleyebiliyordu ve bu iki ek kural
+    gerektiriyordu (baskasinin takimi adina yukleyememe, iki takimliysa
+    secim yapma). Yetki kalkinca o kurallar da gereksizlesti - kaldirildi.
+    """
+    for etiket in ("kaptan", "arkadas", "rakip"):
+        r = client.post(
+            "/api/reports/upload",
+            data={
+                "project_name": "Yarismaci Denemesi",
+                "competition_id": sahne["yar_id"],
+                "team_id": "takim-a",
+            },
+            files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
+            headers=sahne[etiket],
         )
-    )
-    db_session.commit()
-
-    r = client.post(
-        "/api/reports/upload",
-        data={"project_name": "Belirsiz", "competition_id": sahne["yar_id"]},
-        files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=sahne["kaptan"],
-    )
-    assert r.status_code == 400, f"takim secmeden yukledi (HTTP {r.status_code})"
-    assert "team_id" in r.json()["detail"]
-
-
-def test_tek_takimli_yarismaci_secmek_zorunda_degil(client, sahne):
-    """Kilit fazla siki olmamali: tek takimi olan kisi icin secim gereksiz."""
-    r = client.post(
-        "/api/reports/upload",
-        data={"project_name": "Tek Takim", "competition_id": sahne["yar_id"]},
-        files={"file": ("r.pdf", io.BytesIO(b"%PDF-1.4 Mock"), "application/pdf")},
-        headers=sahne["arkadas"],
-    )
-    assert r.status_code == 201, r.text[:200]
-    assert r.json()["team_id"] == "takim-a"
+        assert r.status_code == 403, f"{etiket} rapor yukleyebildi (HTTP {r.status_code})"
 
 
 # --- Cikar catismasi ------------------------------------------------------
