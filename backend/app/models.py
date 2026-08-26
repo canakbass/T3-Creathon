@@ -132,6 +132,23 @@ class Competition(Base):
     # kaydedilmiyordu; artik hangi asamanin kurallarina bakildigi kayitli.
     report_type_name = Column(String, nullable=True)
 
+    # Yarismanin KATEGORI/SEVIYE etiketi - SERBEST METIN.
+    #
+    # NEDEN GLOBAL TABLO DEGIL: sistemde "kategori" adiyla alti INGILIZCE
+    # genel hackathon kategorisi seed ediliyordu ("Robotics & Automation",
+    # "FinTech", "Game Design") ve bunun TEKNOFEST ile hicbir ilgisi yok.
+    # TEKNOFEST'te kategori KATILIMCI SEVIYESI demek - 2026 Genel Sartname:
+    # "Mezun kategorisi lise mezunu ve universite mezunlarini kapsamaktadir",
+    # "Lise seviyesindeki takimlar bir danisman almak zorundadir". Teknoloji
+    # alanini yarismanin ADI belirliyor ("Havacilikta Yapay Zeka").
+    #
+    # NEDEN SABIT LISTE DE DEGIL: bu sistem yalnizca TEKNOFEST icin degil.
+    # Ayni degerlendirme hatti odev kontrolu ("Vize", "Final") ya da ise alim
+    # taramasi ("Kidemli Backend") icin de kullanilabiliyor. Sabit bir enum
+    # o kullanimlarin hepsini disarida birakirdi; her musteri kendi ayrimini
+    # yaziyor.
+    category_label = Column(String, nullable=True)
+
     accepted_languages = Column(Text, nullable=True)   # ["tr"]
     required_headings = Column(Text, nullable=True)    # ["Takım Şeması", ...]
     heading_synonyms = Column(Text, nullable=True)     # {"Kaynakça": ["Referanslar"]}

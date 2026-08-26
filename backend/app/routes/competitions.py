@@ -70,6 +70,7 @@ def _yanit(y: models.Competition) -> dict:
         "description": y.description,
         "category_id": y.category_id,
         "category_name": y.category.name if y.category else None,
+        "category_label": y.category_label,
         "status": y.status,
         "submission_deadline": y.submission_deadline,
         "created_at": y.created_at,
@@ -118,17 +119,31 @@ def create_competition(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(_YONETICI),
 ):
-    kategori = db.query(models.Category).filter(
-        models.Category.id == govde.category_id
-    ).first()
-    if not kategori:
-        raise HTTPException(status_code=404, detail="Kategori bulunamadi.")
+    # Kategori artik SERBEST METIN (category_label). Eski global tabloya
+    # baglanti isteğe bagli - verilirse dogrulaniyor, verilmezse sistemin
+    # varsayilan kategorisine baglaniyor (Report.category_id NOT NULL oldugu
+    # icin bir deger gerekiyor; bu bagimlilik ayri bir adimda kaldirilacak).
+    kategori = None
+    if govde.category_id:
+        kategori = db.query(models.Category).filter(
+            models.Category.id == govde.category_id
+        ).first()
+        if not kategori:
+            raise HTTPException(status_code=404, detail="Kategori bulunamadi.")
+    else:
+        kategori = db.query(models.Category).order_by(models.Category.id).first()
+        if not kategori:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Sistemde hic kategori tanimli degil; category_id verin.",
+            )
 
     y = models.Competition(
         id=f"COMP-{str(uuid.uuid4())[:8].upper()}",
         name=govde.name,
         description=govde.description,
-        category_id=govde.category_id,
+        category_id=kategori.id,
+        category_label=govde.category_label,
         created_by_id=current_user.id,
         status="draft",
         submission_deadline=govde.submission_deadline,

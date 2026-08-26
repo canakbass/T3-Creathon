@@ -84,7 +84,9 @@ export function CompetitionManager() {
       const [y, k] = await Promise.all([listCompetitions(), listCategories()]);
       setYarismalar(y);
       setKategoriler(k);
-      setYeniKategori((mevcut) => mevcut || k[0]?.id || "");
+      // Kategori artik serbest metin; listeden ON SECIM YAPMIYORUZ.
+      // `kategoriler` yalnizca eski kayitlarin adini gosterebilmek icin
+      // yukleniyor.
       setSeciliId((mevcut) => mevcut ?? y[0]?.id ?? null);
     } catch (cause) {
       setError(describeError(cause));
@@ -100,11 +102,17 @@ export function CompetitionManager() {
 
   async function yarismaOlustur(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!yeniAd.trim() || !yeniKategori) return;
+    // Kategori artik ISTEGE BAGLI: serbest metin oldu ve her kullanimda
+    // anlamli bir karsiligi olmayabilir (odev kontrolunde "Vize", ise alim
+    // taramasinda "Kidemli Backend"; bazen hicbiri).
+    if (!yeniAd.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const y = await createCompetition({ name: yeniAd.trim(), categoryId: yeniKategori });
+      const y = await createCompetition({
+        name: yeniAd.trim(),
+        categoryLabel: yeniKategori.trim() || null,
+      });
       setYeniAd("");
       await yukle();
       setSeciliId(y.id);
@@ -252,7 +260,7 @@ export function CompetitionManager() {
                         {y.name}
                       </span>
                       <span className="block text-xs text-muted">
-                        {y.category_name ?? y.category_id} · {y.report_count} rapor ·{" "}
+                        {y.category_label ?? y.category_name ?? "—"} · {y.report_count} rapor ·{" "}
                         {y.referee_count} hakem
                       </span>
                     </span>
@@ -288,20 +296,28 @@ export function CompetitionManager() {
           </label>
           <label className="flex flex-col gap-1.5 sm:w-64">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-              Kategori
+              Kategori / seviye
             </span>
-            <select
+            {/* SERBEST METİN — sabit liste DEĞİL.
+                TEKNOFEST'te kategori katılımcı seviyesi demek ("Lise",
+                "Üniversite ve Üzeri", "Mezun"); teknoloji alanını yarışmanın
+                ADI belirliyor. Ama bu sistem yalnızca TEKNOFEST için değil:
+                aynı değerlendirme hattı ödev kontrolü ("Vize") ya da işe alım
+                taraması ("Kıdemli Backend") için de kullanılıyor. Sabit bir
+                liste o kullanımları dışarıda bırakırdı. */}
+            <input
               value={yeniKategori}
               onChange={(e) => setYeniKategori(e.target.value)}
+              list="kategori-onerileri"
+              placeholder="Örn. Üniversite ve Üzeri"
               data-testid="new-competition-category"
               className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-            >
-              {kategoriler.map((k) => (
-                <option key={k.id} value={k.id}>
-                  {k.name}
-                </option>
+            />
+            <datalist id="kategori-onerileri">
+              {["Lise", "Üniversite ve Üzeri", "Mezun"].map((k) => (
+                <option key={k} value={k} />
               ))}
-            </select>
+            </datalist>
           </label>
           <button
             type="submit"

@@ -45,7 +45,13 @@ class UserResponse(BaseModel):
 class CompetitionCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    category_id: str
+    # Kategori/seviye etiketi - SERBEST METIN, sabit listeden secilmiyor.
+    # TEKNOFEST'te "Lise" / "Universite ve Uzeri" / "Mezun"; baska bir
+    # kullanimda "Vize" ya da "Kidemli Backend" olabilir.
+    category_label: Optional[str] = Field(default=None, max_length=80)
+    # Eski global kategori tablosuna baglanti. Geriye donuk uyumluluk icin
+    # duruyor; yeni yarismalarda gerekmiyor.
+    category_id: Optional[str] = None
     submission_deadline: Optional[datetime] = None
 
 class CompetitionTemplate(BaseModel):
@@ -133,8 +139,10 @@ class CompetitionResponse(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
-    category_id: str
+    category_id: Optional[str] = None
     category_name: Optional[str] = None
+    # Yarismanin kendi kategori/seviye etiketi (serbest metin).
+    category_label: Optional[str] = None
     status: str
     submission_deadline: Optional[datetime] = None
     created_at: datetime

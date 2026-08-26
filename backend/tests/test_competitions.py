@@ -495,3 +495,64 @@ def test_rapor_turu_sablonla_birlikte_kaydediliyor(kurulum, client):
         f"/api/competitions/{kurulum['yar_id']}", headers=kurulum["yonetici"]
     ).json()
     assert tekrar["report_type_name"] == "Ön Tasarım Raporu"
+
+
+# --- Kategori: sabit tablo degil, serbest etiket ---------------------------
+
+def test_kategori_serbest_metin(kurulum, client):
+    """Kategori artik sabit bir listeden secilmiyor.
+
+    NEDEN: sistemde "kategori" adiyla alti INGILIZCE genel hackathon
+    kategorisi seed ediliyordu ("Robotics & Automation", "FinTech",
+    "Game Design") ve bunun TEKNOFEST ile hicbir ilgisi yok. TEKNOFEST'te
+    kategori KATILIMCI SEVIYESI demek - 2026 Genel Sartname: "Mezun
+    kategorisi lise mezunu ve universite mezunlarini kapsamaktadir".
+    Teknoloji alanini yarismanin ADI belirliyor.
+
+    Ustelik bu sistem yalnizca TEKNOFEST icin degil: ayni degerlendirme
+    hatti odev kontrolu ya da ise alim taramasi icin de kullanilabiliyor.
+    Sabit bir liste o kullanimlarin hepsini disarida birakirdi.
+    """
+    ornekler = [
+        ("Havacılıkta Yapay Zeka", "Üniversite ve Üzeri"),
+        ("Havacılıkta Yapay Zeka", "Lise"),
+        ("Vize Ödevi — Makine Öğrenmesi 101", "Vize"),
+        ("Kıdemli Backend Başvuruları", "Kıdemli"),
+    ]
+    for ad, etiket in ornekler:
+        r = client.post(
+            "/api/competitions",
+            json={"name": ad, "category_label": etiket},
+            headers=kurulum["yonetici"],
+        )
+        assert r.status_code == 201, r.text[:200]
+        assert r.json()["category_label"] == etiket, (ad, etiket)
+
+
+def test_ayni_yarismanin_iki_seviyesi_ayri_kayit(kurulum, client):
+    """TEKNOFEST yapisi: ayni yarismanin Lise ve Universite kategorileri
+    AYRI birer degerlendirme surecidir - sablonlari ve rubrikleri farkli
+    olabilir (elimizdeki referans_2026_pdr_sablonu_universite.docx dosya
+    adinda 'universite' yaziyor)."""
+    kimlikler = set()
+    for etiket in ("Lise", "Üniversite ve Üzeri"):
+        r = client.post(
+            "/api/competitions",
+            json={"name": "Havacılıkta Yapay Zeka", "category_label": etiket},
+            headers=kurulum["yonetici"],
+        )
+        assert r.status_code == 201
+        kimlikler.add(r.json()["id"])
+    assert len(kimlikler) == 2, "ayni adli iki seviye tek kayda dustu"
+
+
+def test_kategori_etiketi_zorunlu_degil(kurulum, client):
+    """Kilit fazla siki olmamali: her kullanimda anlamli bir kategori
+    karsiligi olmayabilir."""
+    r = client.post(
+        "/api/competitions",
+        json={"name": "Etiketsiz Değerlendirme"},
+        headers=kurulum["yonetici"],
+    )
+    assert r.status_code == 201, r.text[:200]
+    assert r.json()["category_label"] is None

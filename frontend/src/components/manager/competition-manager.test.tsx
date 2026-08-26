@@ -105,13 +105,22 @@ describe("CompetitionManager", () => {
     expect(await screen.findByTestId("no-competitions")).toBeInTheDocument();
   });
 
-  it("creates a competition with the chosen category", async () => {
+  it("kategoriyi SERBEST METİN olarak gönderir", async () => {
+    // Kategori artık sabit bir listeden seçilmiyor.
+    //
+    // NEDEN: TEKNOFEST'te kategori katılımcı SEVİYESİ demek ("Lise",
+    // "Üniversite ve Üzeri", "Mezun") — teknoloji alanı değil; alanı
+    // yarışmanın adı belirliyor. Üstelik sistem yalnızca TEKNOFEST'e özel
+    // değil: aynı hat ödev kontrolü ("Vize") ya da işe alım taraması
+    // ("Kıdemli Backend") için de kullanılıyor. Sabit liste o kullanımları
+    // dışarıda bırakırdı.
     const fetchMock = mockFetch({ competitions: [] });
     const user = userEvent.setup();
     render(<CompetitionManager />);
 
     await screen.findByTestId("create-competition-form");
-    await user.type(screen.getByTestId("new-competition-name"), "Yeni Yarışma");
+    await user.type(screen.getByTestId("new-competition-name"), "Havacılıkta Yapay Zeka");
+    await user.type(screen.getByTestId("new-competition-category"), "Üniversite ve Üzeri");
     await user.click(screen.getByRole("button", { name: /oluştur/i }));
 
     await waitFor(() => {
@@ -120,8 +129,27 @@ describe("CompetitionManager", () => {
       );
       expect(call).toBeDefined();
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
-        name: "Yeni Yarışma",
-        category_id: "cat-2",
+        name: "Havacılıkta Yapay Zeka",
+        category_label: "Üniversite ve Üzeri",
+      });
+    });
+  });
+
+  it("kategori boş bırakılabilir", async () => {
+    const fetchMock = mockFetch({ competitions: [] });
+    const user = userEvent.setup();
+    render(<CompetitionManager />);
+
+    await screen.findByTestId("create-competition-form");
+    await user.type(screen.getByTestId("new-competition-name"), "Etiketsiz");
+    await user.click(screen.getByRole("button", { name: /oluştur/i }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(
+        ([u, i]) => String(u).endsWith("/api/competitions") && i?.method === "POST",
+      );
+      expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+        category_label: null,
       });
     });
   });

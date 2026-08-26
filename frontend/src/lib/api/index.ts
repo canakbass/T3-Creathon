@@ -379,14 +379,26 @@ export async function getCompetition(id: string): Promise<WireCompetition> {
 export async function createCompetition(input: {
   name: string;
   description?: string;
-  categoryId: string;
+  /**
+   * Kategori / seviye etiketi — SERBEST METİN.
+   *
+   * TEKNOFEST'te kategori katılımcı seviyesi demek ("Lise", "Üniversite ve
+   * Üzeri", "Mezun"); teknoloji alanını yarışmanın ADI belirliyor. Sistem
+   * yalnızca TEKNOFEST'e özel olmadığı için sabit liste yok — aynı hat ödev
+   * kontrolü ("Vize") ya da işe alım taraması ("Kıdemli Backend") için de
+   * kullanılıyor.
+   */
+  categoryLabel?: string | null;
+  /** Eski global kategori tablosuna bağlantı; yeni yarışmalarda gerekmiyor. */
+  categoryId?: string | null;
 }): Promise<WireCompetition> {
   return apiFetch<WireCompetition>("/api/competitions", {
     method: "POST",
     json: {
       name: input.name,
       description: input.description || null,
-      category_id: input.categoryId,
+      category_label: input.categoryLabel ?? null,
+      category_id: input.categoryId ?? null,
     },
   });
 }

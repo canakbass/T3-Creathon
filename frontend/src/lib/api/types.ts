@@ -48,8 +48,10 @@ export interface WireCompetition {
   id: string;
   name: string;
   description: string | null;
-  category_id: string;
+  category_id: string | null;
   category_name: string | null;
+  /** Yarışmanın kendi kategori/seviye etiketi (serbest metin). */
+  category_label: string | null;
   /** draft | open | closed | evaluating | completed */
   status: string;
   submission_deadline: string | null;
