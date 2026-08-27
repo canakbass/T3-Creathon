@@ -48,6 +48,7 @@ const ROLE_ICON_PATHS: Record<Role, string> = {
 export function RoleSelectionScreen() {
   const router = useRouter();
   const signIn = useAuthStore((state) => state.signIn);
+  const logout = useAuthStore((state) => state.logout);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -91,6 +92,20 @@ export function RoleSelectionScreen() {
       router.push(getDashboardPath(session.activeRole));
       return;
     }
+    // TOKEN'I ŞİMDİ SAKLIYORUZ - rol seçilmemiş olsa bile.
+    //
+    // KULLANICININ BİLDİRDİĞİ HATA: "kurum oluştur"a basınca
+    // "Oturumunuzun süresi doldu" diyordu. Sebebi buydu: rol seçilmediği
+    // için `signIn` hiç çağrılmıyor, token store'a yazılmıyordu; sonra
+    // NoMembershipScreen'in yaptığı `POST /api/organizations` isteği
+    // Authorization başlığı OLMADAN gidiyor ve 401 alıyordu. (Aynı istek
+    // API'den doğrudan yapıldığında 201 dönüyordu — fark tam olarak buydu.)
+    //
+    // Kullanıcı GERÇEKTEN giriş yapmış durumda; yalnızca rolü ve kurumu
+    // yok. `signIn` bunu zaten ifade edebiliyor: tanınmayan rol `null`
+    // olarak saklanıyor ve RoleGuard panelleri kapalı tutuyor. Yani
+    // "girebilmek" ile "görebilmek" ayrımı bozulmuyor.
+    oturumuKur(session, null);
     setBekleyen(session);
   }
 
@@ -133,6 +148,9 @@ export function RoleSelectionScreen() {
         email={bekleyen.email}
         emailVerified={bekleyen.emailVerified}
         onKurumKuruldu={() => {
+          // Kurum kuruldu ama token HÂLÂ rolsüz: yeni yetkinin token'a
+          // girmesi için sunucunun yeniden imzalaması gerekiyor.
+          logout();
           // Oturumu tazelemek için giriş ekranına dönüyoruz: kurum
           // kurulduktan sonra token HÂLÂ rolsüz ve kurumsuz. Yeni yetkinin
           // token'a girmesi için sunucunun yeniden imzalaması gerekiyor -
@@ -142,9 +160,16 @@ export function RoleSelectionScreen() {
             "Kurumunuz oluşturuldu. Sorumlu olarak girmek için tekrar giriş yapın.",
           );
         }}
-        onCikis={() => {
+        onCikis={(mesaj) => {
+          // Token'ı da BIRAKIYORUZ: kullanıcı bu ekrandan ayrılıyorsa ya
+          // oturumu düşmüştür ya da başka hesapla girecek. Elde kalan ölü
+          // bir token, sonraki her isteği sessizce 401'e düşürürdü.
+          logout();
           setBekleyen(null);
           setInfo(null);
+          // Oturum düştüyse SEBEBİNİ taşıyoruz. Sessizce giriş ekranına
+          // atmak, kullanıcıya "az önce ne oldu" sorusunu bıraktırırdı.
+          setError(mesaj ?? null);
         }}
       />
     );

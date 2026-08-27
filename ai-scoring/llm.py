@@ -215,11 +215,41 @@ def _gemini_semasini_temizle(sema):
     return sema
 
 
+# 429 alindiginda kac kez ve ne kadar bekleyip tekrar denenecek.
+#
+# NEDEN TEKRAR DENIYORUZ: Gemini ucretsiz katmaninin asil darbogazi
+# DAKIKALIK istek limiti (RPM), gunluk kota degil. Toplu rapor aktariminda
+# arka arkaya birkac analiz calisinca limite takiliyor ve tek denemede pes
+# etmek, sirf zamanlama yuzunden LLM degerlendirmesini kaybetmek demek.
+#
+# NEDEN SADECE IKI KEZ VE KISA: gunluk kota gercekten bitmisse beklemek
+# hicbir sey kazandirmaz, yalnizca analizi geciktirir. Iki deneme,
+# dakikalik limitin acilmasina yetiyor; bitmis kotada da 20 saniyeden fazla
+# kaybettirmiyor.
+GEMINI_TEKRAR_SAYISI = 2
+GEMINI_TEKRAR_BEKLEME = 8  # saniye
+
+
 def _gemini_degerlendir(sistem, kullanici, sema):
+    import time
+
     from google import genai
     from google.genai import errors, types
 
     model = _env("AI_SCORING_MODEL", GEMINI_VARSAYILAN_MODEL)
+    for deneme in range(GEMINI_TEKRAR_SAYISI + 1):
+        sonuc = _gemini_tek_deneme(sistem, kullanici, sema, model, genai, errors, types)
+        veri, hata = sonuc
+        # YALNIZCA hiz/kota hatasinda tekrar deniyoruz. Gecersiz anahtar ya
+        # da bulunamayan model tekrar denemekle duzelmez - beklemek sadece
+        # kullaniciyi bekletir.
+        if hata is None or "kota/hiz" not in hata or deneme == GEMINI_TEKRAR_SAYISI:
+            return sonuc
+        time.sleep(GEMINI_TEKRAR_BEKLEME)
+    return None, "Gemini API kota/hiz sinirina takildi"
+
+
+def _gemini_tek_deneme(sistem, kullanici, sema, model, genai, errors, types):
     try:
         client = genai.Client(api_key=_gemini_anahtari())
         yanit = client.models.generate_content(
@@ -245,7 +275,11 @@ def _gemini_degerlendir(sistem, kullanici, sema):
                 "ve AI_SCORING_MODEL ile degistirin."
             )
         if kod == 429:
-            return None, "Gemini API kota/hiz sinirina takildi (ucretsiz katman gunluk limiti olabilir)"
+            return None, (
+                "Gemini API kota/hiz sinirina takildi. Ucretsiz katmanda dakikalik "
+                "istek limiti dusuktur; toplu aktarimda sik gorulur. Kural tabanli "
+                "motor devreye girdi - puan yine uretildi."
+            )
         return None, f"Gemini istemci hatasi (HTTP {kod})"
     except errors.ServerError as e:
         return None, f"Gemini sunucu hatasi (HTTP {getattr(e, 'code', '5xx')})"

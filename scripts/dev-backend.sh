@@ -50,9 +50,35 @@ port_sahibi() {
   fi
 }
 
+# CALISAN SUNUCUNUN VERI TABANI SILINMIS MI?
+#
+# NEDEN VAR: "sunucu acikken sql_app.db'yi sil" bu projede IKI KEZ zaman
+# kaybettirdi. SQLite acik dosya tanitici uzerinden calisiyor; dosya
+# silinince surec SILINMIS inode'a yazmaya devam ediyor ve her yazma
+# "attempt to write a readonly database" ile patliyor. Sunucu ayakta,
+# istekler geliyor, GET'ler bile calisiyor - yalnizca yazma islemleri 500
+# veriyor. Hata mesaji da sebebi soylemiyor.
+#
+# Dogru sira HER ZAMAN: once stop, sonra sil, sonra start.
+veritabani_silinmis_mi() {
+  local pid="$1"
+  [[ -z "$pid" ]] && return 0
+  if command -v lsof >/dev/null 2>&1 &&
+     lsof -p "$pid" 2>/dev/null | grep -q "sql_app.db (deleted)"; then
+    echo ""
+    echo "!! DIKKAT: calisan sunucu SILINMIS bir veri tabani dosyasi tutuyor."
+    echo "   Her YAZMA islemi 'readonly database' ile 500 verecek."
+    echo "   Cozum:  $0 restart"
+    echo ""
+    return 1
+  fi
+  return 0
+}
+
 baslat() {
   if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     echo "zaten calisiyor (pid $(cat "$PIDFILE"))"
+    veritabani_silinmis_mi "$(cat "$PIDFILE")"
     return 0
   fi
 

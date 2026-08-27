@@ -840,5 +840,75 @@ finally:
             os.environ[k] = v
     importlib.reload(llm_modulu)
 
+
+
+# --- ALAKASIZ BELGE: kategori ONERILMEMELI --------------------------------
+#
+# Kullanicinin bildirdigi hata: matematik odevi olan bir belge icin sistem
+# "Daha iyi eslesen kategori: Game Design (%5). Kategori degisikligi hakemin
+# karari." diyordu. %5'lik bir eslesme rastlantisaldir ve hakemi kategori
+# degistirmeye yonlendirecek bir kanit DEGILDIR.
+#
+# Bu, urun genellestikce daha da onemli: sistem odev ve ise alim
+# degerlendirmesinde de kullaniliyor ve o kullanimlarda tohum kategorileri
+# (TEKNOFEST alanlari) belgelerin hicbirine uymuyor.
+import category as _kategori_modulu
+
+_gercek_read_report = _kategori_modulu.read_report
+try:
+    _ALAKASIZ = """Matematik Odevi - Integral Hesaplama
+    Bu odevde belirli integral kavrami islenmistir. Riemann toplami ile alan
+    hesabi yapilmis, temel teorem uygulanmistir. Turev ve integral iliskisi
+    gosterilmistir. Ornek sorular ve cozumleri asagida verilmistir.
+    """
+    _kategori_modulu.read_report = lambda *a, **k: {"metin": _ALAKASIZ, "sayfa_sayisi": 2}
+    _KATEGORILER = [
+        {"id": "cat-1", "name": "Robotics & Automation", "description": "Robotik ve otomasyon"},
+        {"id": "cat-2", "name": "AI & Machine Learning", "description": "Yapay zeka"},
+        {"id": "cat-3", "name": "Game Design", "description": "Oyun tasarimi"},
+    ]
+    _sonuc = _kategori_modulu.analyze_category_fit_for_ui(
+        "sahte.pdf", _KATEGORILER, declared_category_id="cat-1"
+    )
+    _bulgular = " ".join(_sonuc["findings"])
+
+    check(
+        "alakasiz belgede kategori ONERILMIYOR",
+        "Daha iyi eşleşen kategori" not in _bulgular,
+        _bulgular[:200],
+    )
+    # DIKKAT - TURKCE KUCULTME TUZAGI: "HİÇBİRİNE".lower() "hiçbirine"
+    # DEGIL, "hi̇çbi̇ri̇ne" uretiyor (i + BIRLESIK NOKTA U+0307, iki kod
+    # noktasi). Yani `"hiçbir" in metin.lower()` HER ZAMAN False donuyordu.
+    # Bu test ilk yazildiginda tam olarak buna takildi. Kucultmek yerine iki
+    # yazimi da acikca ariyoruz.
+    check(
+        "hicbirinin uymadigi ACIKCA soyleniyor",
+        "HİÇBİRİNE" in _sonuc["summary"] or "hiçbirine" in _sonuc["summary"],
+        _sonuc["summary"],
+    )
+    check(
+        "dusuk puanin KALITE demek olmadigi yaziyor",
+        "KALİTESİ" in _bulgular,
+        _bulgular[:200],
+    )
+
+    # Kilit fazla siki olmamali: GERCEKTEN eslesen bir belgede oneri
+    # calismaya devam etmeli.
+    _UYAN = " ".join(["robot otonom motor sensor kontrol algoritma"] * 40)
+    _kategori_modulu.read_report = lambda *a, **k: {"metin": _UYAN, "sayfa_sayisi": 2}
+    _sonuc2 = _kategori_modulu.analyze_category_fit_for_ui(
+        "sahte.pdf", _KATEGORILER, declared_category_id="cat-3"
+    )
+    check(
+        "gercekten eslesen belgede oneri HALA veriliyor",
+        any("Daha iyi eşleşen" in b for b in _sonuc2["findings"])
+        or _sonuc2["score"] >= 65,
+        f"{_sonuc2['score']} · {_sonuc2['findings']}",
+    )
+finally:
+    _kategori_modulu.read_report = _gercek_read_report
+
+
 print(f"\n{passed} basarili, {failed} basarisiz")
 sys.exit(1 if failed else 0)

@@ -12,8 +12,20 @@ export function describeError(cause: unknown): string {
   if (cause instanceof NetworkError) return cause.message;
 
   if (cause instanceof ApiError) {
+    // 401'DE DE SUNUCUNUN CÜMLESİ.
+    //
+    // Sabit "oturumunuzun süresi doldu" cümlesi ÜÇ FARKLI durumu tek bir
+    // yanlış mesaja çeviriyordu:
+    //   • yanlış şifre        → "E-posta veya şifre hatalı"  (oturum YOK ki dolsun)
+    //   • bilinmeyen token    → "Oturum doğrulanamadı..."
+    //   • şifre sıfırlanmış   → "Oturumunuz sonlandırıldı..."
+    // Kullanıcı yanlış şifre girdiğinde "süresi doldu" görüyor ve şifresini
+    // düzeltmek yerine tekrar giriş yapmayı deniyordu — hata mesajı onu
+    // YANLIŞ eyleme yönlendiriyordu.
     if (cause.isUnauthorized) {
-      return "Oturumunuzun süresi doldu. Lütfen tekrar giriş yapın.";
+      return (
+        cause.detail?.trim() || "Oturumunuzun süresi doldu. Lütfen tekrar giriş yapın."
+      );
     }
     // 403 ve 404'te SUNUCUNUN cümlesi varsa onu gösteriyoruz.
     //

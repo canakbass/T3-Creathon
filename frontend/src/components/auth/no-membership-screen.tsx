@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { createOrganization, resendVerification } from "@/lib/api";
+import { ApiError, createOrganization, resendVerification } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
 
 /**
@@ -28,7 +28,8 @@ interface Props {
   emailVerified: boolean;
   /** Kurum kurulduktan sonra oturumu tazelemek için. */
   onKurumKuruldu: () => void;
-  onCikis: () => void;
+  /** İsteğe bağlı mesajla giriş ekranına döner. */
+  onCikis: (mesaj?: string) => void;
 }
 
 export function NoMembershipScreen({
@@ -50,6 +51,10 @@ export function NoMembershipScreen({
       const sonuc = await resendVerification(email);
       setBilgi(sonuc.message);
     } catch (cause) {
+      if (cause instanceof ApiError && cause.isUnauthorized) {
+        onCikis(describeError(cause));
+        return;
+      }
       setHata(describeError(cause));
     } finally {
       setBusy(false);
@@ -64,6 +69,14 @@ export function NoMembershipScreen({
       await createOrganization(kurumAdi);
       onKurumKuruldu();
     } catch (cause) {
+      // 401 = ELDEKİ TOKEN ARTIK GEÇERSİZ (süresi doldu, şifre sıfırlandı ya
+      // da hesap bu veri tabanında yok). Bu ekranda kalmanın anlamı yok:
+      // sonraki her istek de aynı hatayı verir ve kullanıcı neden hiçbir
+      // şeyin işlemediğini anlamaz. Girişe geri gönderiyoruz.
+      if (cause instanceof ApiError && cause.isUnauthorized) {
+        onCikis(describeError(cause));
+        return;
+      }
       setHata(describeError(cause));
     } finally {
       setBusy(false);
@@ -201,7 +214,7 @@ export function NoMembershipScreen({
 
         <button
           type="button"
-          onClick={onCikis}
+          onClick={() => onCikis()}
           data-testid="no-membership-logout"
           className="mx-auto mt-6 block text-sm font-semibold text-muted underline-offset-4 hover:text-brand-700 hover:underline"
         >

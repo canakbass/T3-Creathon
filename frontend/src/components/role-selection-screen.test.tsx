@@ -278,14 +278,23 @@ describe("RoleSelectionScreen", () => {
     expect(useAuthStore.getState().role).toBeNull();
   });
 
-  it("shows an error and does not navigate when the credentials are rejected", async () => {
+  it("YANLIŞ ŞİFREDE doğru mesajı gösteriyor", async () => {
+    // KULLANICININ BİLDİRDİĞİ HATA: yanlış şifre girince ekranda
+    // "Oturumunuzun süresi doldu. Lütfen tekrar giriş yapın." yazıyordu.
+    //
+    // Sabit bir 401 cümlesi ÜÇ farklı durumu tek bir yanlış mesaja
+    // çeviriyordu ve bu en zararlısıydı: ortada dolacak bir oturum YOK,
+    // kullanıcı şifresini düzeltmek yerine tekrar giriş yapmayı deniyordu —
+    // mesaj onu YANLIŞ eyleme yönlendiriyordu.
     mockFetch({ loginStatus: 401 });
     const user = userEvent.setup();
     render(<RoleSelectionScreen />);
 
     await girisYap(user);
 
-    expect(await screen.findByTestId("login-error")).toBeInTheDocument();
+    const hata = await screen.findByTestId("login-error");
+    expect(hata).toHaveTextContent(/sifre hatali|şifre hatalı/i);
+    expect(hata).not.toHaveTextContent(/süresi doldu/i);
     expect(pushMock).not.toHaveBeenCalled();
     expect(useAuthStore.getState().token).toBeNull();
   });
@@ -314,5 +323,26 @@ describe("RoleSelectionScreen", () => {
 
     expect(screen.getByLabelText(/e-posta/i)).toHaveValue("asdfghjkl@gmail.com");
     expect(screen.getByLabelText(/şifre/i)).toHaveValue("asdfghjkl");
+  });
+
+  it("ÜYELİĞİ OLMAYAN hesapta da TOKEN saklanıyor", async () => {
+    // KULLANICININ BİLDİRDİĞİ HATA: "kurum oluştur"a basınca
+    // "Oturumunuzun süresi doldu" diyordu.
+    //
+    // Sebebi: rol seçilmediği için `signIn` hiç çağrılmıyor, token store'a
+    // yazılmıyordu; sonra üyeliksiz ekranın yaptığı authenticated istek
+    // Authorization başlığı OLMADAN gidip 401 alıyordu. Aynı istek API'den
+    // doğrudan yapıldığında 201 dönüyordu — fark tam olarak buydu.
+    mockFetch({ uyelikler: [] });
+    const user = userEvent.setup();
+    render(<RoleSelectionScreen />);
+
+    await girisYap(user);
+
+    await waitFor(() => expect(useAuthStore.getState().token).toBe("test-jwt"));
+    // Rol YOK: panellere erişim açılmıyor, yalnızca istek yetkilendirilebiliyor.
+    expect(useAuthStore.getState().role).toBeNull();
+    expect(useAuthStore.getState().organizationId).toBeNull();
+    expect(pushMock).not.toHaveBeenCalled();
   });
 });

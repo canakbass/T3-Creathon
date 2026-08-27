@@ -64,6 +64,21 @@ DEFAULT_SCORING_RULES_PATH = (
 # kalibre edecekti.
 HEDEF_ESLESME_ORANI = 0.25
 
+# ANLAMLI ESLESME ESIGI.
+#
+# Bunun ALTINDAKI bir oran GURULTUDUR, oneri degil. Olculdu: matematik odevi
+# olan bir belge TEKNOFEST kategorilerine karsi calistirilinca sistem
+# "Daha iyi eslesen kategori: Game Design (%5)" diyordu - yani tamamen
+# alakasiz bir belge icin rastgele bir kategori ONERIYORDU. Hakem o oneriye
+# bakip kategoriyi degistirebilir; %5'lik bir eslesme boyle bir eylemi
+# hakli cikaracak bir kanit DEGIL.
+#
+# Bu, urunun genellesmesiyle daha da onemli hale geldi: sistem artik odev ve
+# ise alim degerlendirmesinde de kullaniliyor ve o kullanimlarda tohum
+# kategorileri (TEKNOFEST alanlari) belgelerin HICBIRINE uymuyor. Dogru
+# cevap "hicbiri uymuyor", uydurma bir en-iyi degil.
+ANLAMLI_ESLESME_ORANI = 0.10
+
 # Baska bir kategori daha iyi eslesiyorsa puandan en fazla bu kadar
 # oraninda kesinti yapilir. 1.0 yapmadik: beyan edilen kategori mutlak
 # olarak iyi esleşiyorsa, daha iyi bir alternatifin varligi raporu
@@ -211,7 +226,15 @@ def analyze_category(
 
     mutlak = min(1.0, beyan["oran"] / HEDEF_ESLESME_ORANI) if HEDEF_ESLESME_ORANI else 0.0
 
+    # CEZA YALNIZCA ANLAMLI BIR RAKIP ICIN.
+    #
+    # Onceden %5'lik bir rakip, %0'lik bir beyani cezalandiriyordu - yani
+    # gurultu, puani asagi cekmenin gerekcesi oluyordu. Puan zaten dusuk
+    # olacak (mutlak carpan 0), ama SEBEBI "baska kategori daha iyi" degil
+    # "hicbir kategori uymuyor" olmali.
     en_iyi_rakip = next((s for s in siralama if s is not beyan), None)
+    if en_iyi_rakip and en_iyi_rakip["oran"] < ANLAMLI_ESLESME_ORANI:
+        en_iyi_rakip = None
     ceza = 0.0
     if en_iyi_rakip and en_iyi_rakip["oran"] > beyan["oran"] > 0:
         ceza = (en_iyi_rakip["oran"] - beyan["oran"]) / en_iyi_rakip["oran"]
@@ -266,9 +289,18 @@ def analyze_category_fit_for_ui(
         en_iyi,
     )
 
+    # HICBIR KATEGORI ANLAMLI DEGILSE, "en iyi"yi ONERMIYORUZ.
+    # (Gerekce icin bkz. ANLAMLI_ESLESME_ORANI.)
+    hicbiri_uymuyor = en_iyi["oran"] < ANLAMLI_ESLESME_ORANI
+
     bulgular = []
     if sonuc["beyan_edilen"]:
-        if puan >= 85:
+        if hicbiri_uymuyor:
+            ozet = (
+                "Rapor, sistemde tanımlı kategorilerin HİÇBİRİNE anlamlı biçimde "
+                "uymuyor."
+            )
+        elif puan >= 85:
             ozet = f"Rapor, beyan edilen \"{sonuc['beyan_edilen']}\" kategorisine uyumlu."
         elif puan >= 65:
             ozet = (
@@ -283,7 +315,19 @@ def analyze_category_fit_for_ui(
             f"Beyan edilen kategori \"{sonuc['beyan_edilen']}\": kategori terimlerinin "
             f"%{round(100 * beyan_satiri['oran'])}'i raporda geçiyor."
         )
-        if en_iyi["kategori"] != sonuc["beyan_edilen"]:
+        if hicbiri_uymuyor:
+            bulgular.append(
+                "Tanımlı kategorilerin hiçbiri bu raporla anlamlı biçimde eşleşmiyor "
+                f"(en yüksek eşleşme %{round(100 * en_iyi['oran'])}, anlamlı sayılan "
+                f"eşik %{round(100 * ANLAMLI_ESLESME_ORANI)}). Rapor bu yarışmanın "
+                "alanı dışında olabilir ya da kategori tanımları bu kuruma göre "
+                "güncellenmemiş olabilir."
+            )
+            bulgular.append(
+                "Bu düşük puan, raporun KALİTESİ hakkında bir şey söylemiyor — "
+                "yalnızca tanımlı kategorilerle eşleşmediğini gösteriyor."
+            )
+        elif en_iyi["kategori"] != sonuc["beyan_edilen"]:
             bulgular.append(
                 f"Daha iyi eşleşen kategori: \"{en_iyi['kategori']}\" "
                 f"(%{round(100 * en_iyi['oran'])}). Kategori değişikliği hakemin kararı."
@@ -292,7 +336,9 @@ def analyze_category_fit_for_ui(
             bulgular.append("Beyan edilen kategori, en iyi eşleşen kategori ile aynı.")
     else:
         # Beyan edilen kategori sisteme gecilmemis - ne oldugunu saklamiyoruz
-        if puan >= 85:
+        if hicbiri_uymuyor:
+            ozet = "Rapor, tanımlı kategorilerin hiçbirine anlamlı biçimde uymuyor."
+        elif puan >= 85:
             ozet = f"Rapor en çok \"{en_iyi['kategori']}\" kategorisine uyuyor."
         elif puan >= 65:
             ozet = f"Rapor \"{en_iyi['kategori']}\" kategorisine kısmen uyuyor."
@@ -302,10 +348,18 @@ def analyze_category_fit_for_ui(
             "Beyan edilen kategori sisteme geçilmediği için en uygun kategori önerisi "
             "puanlandı; bu, kategori uygunluğunun doğrulanması DEĞİLDİR."
         )
-        bulgular.append(
-            f"En uygun kategori önerisi: \"{en_iyi['kategori']}\" "
-            f"(%{round(100 * en_iyi['oran'])} terim eşleşmesi)."
-        )
+        if hicbiri_uymuyor:
+            bulgular.append(
+                f"En yüksek eşleşme yalnızca %{round(100 * en_iyi['oran'])} — anlamlı "
+                f"sayılan eşiğin (%{round(100 * ANLAMLI_ESLESME_ORANI)}) altında. "
+                "Bu yüzden bir kategori ÖNERİLMİYOR: bu düzeydeki bir eşleşme "
+                "rastlantısaldır ve hakemi yanlış yönlendirir."
+            )
+        else:
+            bulgular.append(
+                f"En uygun kategori önerisi: \"{en_iyi['kategori']}\" "
+                f"(%{round(100 * en_iyi['oran'])} terim eşleşmesi)."
+            )
 
     if beyan_satiri["eslesen_kelimeler"]:
         ornekler = ", ".join(beyan_satiri["eslesen_kelimeler"][:8])
