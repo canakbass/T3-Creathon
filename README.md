@@ -12,10 +12,11 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 | Klasör | Kişi | İçerik | Durum |
 |---|---|---|---|
 | `ai-doc-analysis/` | Hasan | Dil/şablon/başlık kontrolü + şablondan otomatik çıkarım | ✅ Çalışıyor, gerçek veriyle test edildi (46 test) |
-| `ai-scoring/` | Hayrettin | Kategori, benzerlik, kriter puanlama | ✅ Çalışıyor, backend'e entegre edildi (102 test) — mock'lar kaldırıldı |
-| `backend/` | Mustafa | FastAPI — API, veri modeli, auth, yarışma/takım/atama | ✅ Çalışıyor (93 test); SQLite veya Supabase Postgres |
-| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Backend'e bağlı (123 test); tüm mock veri kaldırıldı |
+| `ai-scoring/` | Hayrettin | Kategori, benzerlik, kriter puanlama | ✅ Çalışıyor, backend'e entegre edildi (106 test) — mock'lar kaldırıldı |
+| `backend/` | Mustafa | FastAPI — API, veri modeli, auth, çok kiracılılık, yarışma/takım/atama | ✅ Çalışıyor (259 test); SQLite veya Supabase Postgres |
+| `frontend/` | Mahmut | Next.js — rol bazlı paneller | ✅ Backend'e bağlı (195 test); tüm mock veri kaldırıldı |
 | `docs/` | — | Ortak dokümanlar, API sözleşmesi, MVP kuralları | Güncel |
+| `teslim/` | — | İş Modeli Canvası + proje sunumu (üretim betikleri, diyagramlar, ekran görüntüleri) | Git dışında — teslim öncesi public repoda durmasın |
 
 ## MVP'nin 6 zorunlu maddesi — hepsi tamam
 
@@ -34,8 +35,13 @@ ve [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
    Tanımı" ekranından zorunlu başlıkları ve kriter ağırlıklarını girer →
    başvuruyu açar. (Kurallar tanımlanmadan başvuru **açılamıyor** — AI neye
    göre kontrol yapacağını bilemez.)
-2. **Yarışmacı** giriş yapar → açık yarışmayı seçip **kendi raporunu yükler**
-   → AI analizi otomatik başlar (~2 sn). Yönetici tek tek dosya yüklemiyor.
+2. **Yarışma Yöneticisi** teslim edilen raporları toplu aktarır. Takım
+   **dosya adındaki e-postalardan** çıkarılır (bkz. aşağıdaki bölüm); AI
+   analizi otomatik başlar (~2 sn).
+
+   Yarışmacı rapor **yüklemez** — yalnızca sonucunu sorgular. Sebebi:
+   raporun sonucunu takım üyeliği belirliyor ve üyeliğin doğru kişiye ait
+   olduğuna yalnızca yönetici kefil olabilir.
 3. **Yarışma Yöneticisi** hakemleri yarışmaya ekler → "Dengeli dağıt" ile
    raporlar hakemler arasında paylaştırılır → gerekirse tek tek sorumlu
    hakem değiştirilir.
@@ -161,11 +167,13 @@ Dört rol "bu kurumda kim ne yapar" sorusunu cevaplıyordu ama "bu kurumda
 yarışma yöneticisindeydi ve her yönetici sınırsız yönetici üretebiliyordu.
 Kurum sorumlusu kendi kurumunun üyelerini ve rollerini yönetir, kendi
 kurumunda her rolü seçebilir — ama başka bir kurumun tek kaydını bile
-göremez.
+göremez. Üye listesi **sunucu tarafında** sayfalanıyor, role göre
+filtreleniyor ve aranıyor; tümünü gönderip tarayıcıda kesmek, listenin
+yalnızca sorumluya açık olmasının anlamını kaldırırdı.
 
-Yeni kurum açmak bir API ucu **değil** (`scripts/kurum-ac.py`): uç nokta
-olsaydı hesabı olan herkes kendini sorumlu yaptığı yeni bir kiracı
-üretebilirdi.
+**Kurum açma iki yoldan:** kullanıcı e-postasını doğruladıktan sonra
+panelden kendi kurumunu kurabilir (kişi başına en fazla 3), ya da sunucuya
+erişimi olan biri betikle açar:
 
 ```fish
 cd backend
@@ -173,18 +181,56 @@ cd backend
     --slug ege-uni --ad "Ege Üniversitesi" --sorumlu dekan@ege.edu.tr
 ```
 
+Kendi kurumunu kurmak bir süre **reddedilmişti**: "uç nokta olsaydı hesabı
+olan herkes kendini sorumlu yaptığı bir kiracı üretebilirdi." O gerekçe
+artık geçerli değil — kurum yalıtımı kapandıktan sonra yeni açılan kurum
+**bomboş** ve sahibi başka hiçbir kurumun tek kaydını göremiyor. Tehlike
+"kurumu olmak" değil, "başka kuruma **ulaşmak**"tı. Yerine geçen koşul:
+e-posta doğrulanmış olmalı — yoksa sahte adreslerle sınırsız kiracı
+üretilebilirdi.
+
 Demo verisinde iki kurum var — **T3 Vakfı** (`@teknofest.org` hesapları) ve
 **Manisa CBÜ** (`sorumlu@` / `ogretim@` / `asistan@` / `ogrenci@cbu.edu.tr`,
 şifre `parola123`). Tek kurumla "A kurumu B'yi göremiyor" kuralı hiç
 sınanamaz; yalıtımı denemek için karşı tarafta gerçek hesaplar gerekiyor.
 
+### Yarışma yöneticisi ne tanımlıyor?
+
+Şartname rolü şöyle tarif ediyor: *"güncel rapor şablonunu, kategori
+bilgilerini ve değerlendirme kriterlerini tanımlar."* Form uzun süre
+yalnızca **başlıkları, ağırlıkları ve adı** alıyordu — "bu yarışma ne için
+var, rapordan ne bekleniyor" sorusunun cevabını yazacak yer yoktu. Üç alan
+eklendi:
+
+| Alan | Nerede görünür |
+|---|---|
+| Yarışmanın amacı | Yarışmacı ve hakem |
+| Rapordan beklentiler | Hakem karar verirken |
+| Her kriterin açıklaması | Hakem puanlarken |
+
+Son madde önemli: açıklama olmadan *"Özgünlük %40"* ifadesinin ne anlama
+geldiği her hakemin kendi yorumuna kalıyordu — aynı rapora iki hakem çok
+farklı puan verebilirdi.
+
+**Bu metinler AI'nin sayısal puanını değiştirmiyor.** Kriter puanlaması bir
+kural motoru ve serbest metin bir kurala dönüşmüyor; işleri insanlara bağlam
+vermek. Form da bunu açıkça yazıyor — "AI kullanıyor" izlenimi vermek,
+hakemin puana duyduğu güveni yanlış yere yaslardı.
+
+Bunun bir sonucu var: **yeniden analiz yalnızca AI'nin ölçütleri
+değiştiğinde** isteniyor (dil, başlıklar, eşanlamlılar, sayfa sınırları).
+Ayırt etmeseydik yalnızca amaç metnini düzeltmek bile *"bu yarışmada N rapor
+analiz edildi"* uyarısını tetikler, yani şartnamedeki görev yerine
+getirilemezdi.
+
 ### Yarışma aşamaları
 
 `draft` → `open` → `closed` → `evaluating` → `completed`
 
-Yarışmacı **yalnızca `open`** aşamasında rapor yükleyebilir; yönetici test
-ve düzeltme için her aşamada yükleyebilir. `open`'a geçmek için şablon
-kuralları ve kriterler tanımlı olmalı.
+Aktarımı **yönetici** yapıyor ve aşama kısıtı yok: gerçek akışta raporlar
+başvuru kapandıktan *sonra* toplu aktarılıyor, yani `closed` aşamasında
+aktarım normal durum. `open`'a geçmek için şablon kuralları ve kriterler
+tanımlı olmalı — kurallar olmadan AI neye göre kontrol yapacağını bilemez.
 
 **Not:** `backend/` ve `frontend/`, Mahmut/Mustafa'nın ayrı ilerlettiği
 [t3creathon_web](https://github.com/mahmutconger/t3creathon_web) reposundan
@@ -321,14 +367,13 @@ tutarsızlık bitti, tüm AI çıktıları da Türkçe.
 
 ### Hâlâ açık olan (senin kararın)
 
-- `criteria-template-form.tsx` (Yarışma Yöneticisi'nin kriter tanımlama
-  formu) hâlâ hiçbir yere kaydetmiyor — backend'de o şekle karşılık gelen bir
-  uç nokta yok (`POST /api/criteria` farklı bir şema bekliyor: tek kriter,
-  `category_id`+`title`+`max_score`). Bu MVP maddesi değil, o yüzden
-  dokunmadım.
 - Yarışmacı rapor **yükleyemez**, yalnızca sonucunu sorgular. Yükleme
   yöneticide: raporun sonucunu takım üyeliği belirliyor ve üyeliğin doğru
   kişiye ait olduğuna yalnızca yönetici kefil olabilir.
+- **KYS entegrasyonu yok.** Takım/başvuru verisi elle ya da dosya adından
+  besleniyor; gerçek kayıtlar hâlâ t3kys.com'da.
+- **Ölçek testi yapılmadı.** Sistem birkaç yüz raporla değil, onlarcasıyla
+  denendi.
 
 ## TEKNOFEST'in gerçek yapısına uyum (2026-08-26)
 
@@ -448,18 +493,23 @@ teslim ediliyor; bu sistem onları **değerlendiren** katman, toplama noktası
 değil.
 
 **Yarışmacı sonucunu nasıl görüyor:** takım üyeliğinden. Yönetici raporu
-`team_id` ile aktarıyor, o takımın **her üyesi** raporu görüyor — yüklediği
-için değil, takımda olduğu için.
+aktarırken takım, dosya adındaki e-postalardan çıkarılıyor; o takımın **her
+üyesi** raporu görüyor — yüklediği için değil, takımda olduğu için.
 
-**Hesaplar neden yöneticiden açılıyor:** raporun sonucunu takım üyeliği
-belirliyor ve üyelik e-postaya bağlı. Kendi kendine kayıt açık olsaydı, bir
-takım üyesinin e-postasını ilk kaydettiren kişi o takımın sonuçlarını
-görürdü. E-posta doğrulaması bunu **çözmez** — doğrulama "bu kişi bu kutuya
-erişebiliyor" der; asıl soru "bu e-posta bu takıma mı ait" ve onun cevabını
-yalnızca yönetici bilir. `POST /api/auth/users` ile hesap açılıyor, şifreyi
-`secrets` üretiyor, aynı istekte takıma ekleniyor. Kendi kendine kayıt
-varsayılan olarak **kapalı** (`SELF_REGISTRATION=1` ile açılır) — yapılandırmayı
-unutmak güvenliği artırsın diye.
+**Kendi kendine kayıt neden bir süre kapalıydı, neden şimdi açık:** raporun
+sonucunu takım üyeliği belirliyor ve üyelik e-postaya bağlı. Doğrulamasız
+kayıt açık olsaydı, bir takım üyesinin e-postasını ilk kaydettiren kişi o
+takımın sonuçlarını görürdü.
+
+Kapıyı açan iki değişiklik oldu: (1) e-posta doğrulama eklendi, (2) kayıt
+**hiçbir rol ve hiçbir kurum vermiyor**. Takım bağı kayıt anında değil
+**doğrulama anında** kuruluyor — aksi halde saldırgan kayıt olur,
+doğrulamaz ve bağ yine kurulmuş olurdu.
+
+Yönetici yolu da duruyor (`POST /api/auth/users`): şifreyi `secrets`
+üretiyor, aynı istekte takıma ekliyor. İkisi birbirinin yerine geçmiyor —
+yönetici yolunda kimliğe **yönetici** kefil oluyor, kendi kaydında kişi
+posta kutusuna erişebildiğini **kanıtlıyor**.
 
 ## Bir yarışmanın birden fazla aşaması
 
@@ -536,20 +586,38 @@ Ayrıntılı kurulum için **[KURULUM.md](KURULUM.md)**. Kısa hâli:
 # ai-doc-analysis (Hasan)          -> 46 test
 .venv/bin/python ai-doc-analysis/tests/test_analyzer.py
 
-# ai-scoring (Hayrettin)           -> 102 test
+# ai-scoring (Hayrettin)           -> 106 test
 .venv/bin/python ai-scoring/tests/test_scorer.py
 
-# backend (Mustafa)                -> 93 test
+# backend (Mustafa)                -> 259 test
 cd backend && ../.venv/bin/python -m pytest tests/ -q; cd ..
 
-# frontend (Mahmut)                -> 123 test
+# frontend (Mahmut)                -> 195 test
 cd frontend && npm install && npm test; cd ..
 
-# uctan uca, CALISAN sunucuya karsi -> 48 kontrol
+# uctan uca, CALISAN sunucuya karsi -> 76 kontrol
 scripts/dev-backend.sh start
 .venv/bin/python scripts/e2e-test.py
 scripts/dev-backend.sh stop
+
+# Dogrulama zincirinin TAMAMINI sinamak icin (SMTP'siz):
+DEV_EXPOSE_EMAIL_TOKEN=1 scripts/dev-backend.sh start
+DEV_EXPOSE_EMAIL_TOKEN=1 .venv/bin/python scripts/e2e-test.py
 ```
+
+**Geliştirme veri tabanını sıfırlarken sıra önemli:**
+
+```bash
+scripts/dev-backend.sh stop      # ÖNCE durdur
+rm -f backend/sql_app.db         # SONRA sil
+scripts/dev-backend.sh start     # SONRA başlat
+```
+
+Sunucu açıkken silerseniz SQLite **silinmiş inode'a** yazmaya devam eder:
+sunucu ayakta kalır, `GET`'ler çalışır, ama her yazma
+`attempt to write a readonly database` ile 500 verir — ve hata mesajı sebebi
+söylemez. Bu tuzak bu projede iki kez zaman kaybettirdi, o yüzden
+`dev-backend.sh` artık bu durumu tespit edip uyarıyor.
 
 `ai-doc-analysis` ve `ai-scoring` testleri pytest ile **değil** doğrudan
 çalıştırılıyor — kendi `check()` fonksiyonlarını kullanan betikler ve sonda
@@ -595,8 +663,9 @@ Seed kullanıcıları (ilk açılışta oluşur, şifreleri `password123`):
 | `competitor2@teknofest.org` | Yarışmacı | Glieser (üye) |
 | `rakip@teknofest.org` | Yarışmacı | Zebot |
 
-Bu hesaplar seed'den geliyor. Yeni hesaplar **yönetici panelinden** açılıyor
-("Hesap Aç" bölümü) — kendi kendine kayıt kapalı.
+Bu hesaplar seed'den geliyor. Yeni hesaplar iki yoldan açılabilir: yönetici
+panelinden ("Hesap Aç") ya da kullanıcının kendi kaydıyla — ikisi de
+geçerli, farkları için yukarıdaki *"Hesap açma: iki yol"* bölümüne bakın.
 
 Çok rollü test hesabı: `asdfghjkl@gmail.com` / `asdfghjkl` — beş rolün
 hepsi (kurum sorumlusu dahil), girişte kurum + rol seçim ekranı çıkar.
@@ -606,19 +675,40 @@ hepsi (kurum sorumlusu dahil), girişte kurum + rol seçim ekranı çıkar.
 (hakem), `ogrenci@cbu.edu.tr` (yarışmacı). Bu hesaplar T3 Vakfı'nda **hiçbir
 role sahip değil** — kurumlar arası yalıtım bunlarla denenir.
 
-Takım kurgusu bilinçli, üç kuralı birden gösteriyor: `competitor2@`
-kendi yüklemediği (yöneticinin aktardığı) Glieser raporunu **görebilir**;
-`rakip@` aynı raporu **göremez**; `competitor@` iki takımda olduğu için
-rapor yüklerken **hangi takım adına** yüklediğini seçmek zorundadır.
+Takım kurgusu bilinçli: `competitor2@` kendi yüklemediği (yöneticinin
+aktardığı) Glieser raporunu **görebilir**; `rakip@` aynı raporu
+**göremez**; `competitor@` iki takımda olduğu için her ikisinin de
+sonucunu görür. Üç kural da tek kurguyla sınanıyor.
 
-### Son test durumu (2026-08-26)
+### Kategori uyumu: "hiçbiri uymuyor" da bir cevap
+
+Sistem uzun süre her raporu **bir kategoriye zorluyordu**. Matematik ödevi
+olan bir belge için çıktı şuydu:
+
+> Beyan edilen kategori "Robotics & Automation": kategori terimlerinin %0'i
+> raporda geçiyor.
+> **Daha iyi eşleşen kategori: "Game Design" (%5).** Kategori değişikliği
+> hakemin kararı.
+
+%5'lik bir eşleşme **rastlantıdır** ve hakemi kategori değiştirmeye
+yönlendirecek bir kanıt değildir. Artık %10 eşiğinin altında hiçbir kategori
+önerilmiyor; onun yerine "tanımlı kategorilerin hiçbiri bu raporla anlamlı
+biçimde eşleşmiyor — rapor bu yarışmanın alanı dışında olabilir ya da
+kategori tanımları bu kuruma göre güncellenmemiş olabilir" ve **"bu düşük
+puan raporun *kalitesi* hakkında bir şey söylemiyor"** deniyor.
+
+Ürün genelleştikçe bu daha da önemli hâle geldi: sistem ödev ve işe alım
+değerlendirmesinde de kullanılıyor ve o kullanımlarda tohum kategorileri
+(TEKNOFEST alanları) belgelerin hiçbirine uymuyor.
+
+### Son test durumu (2026-08-27)
 
 | Paket | Sonuç |
 |---|---|
 | `ai-doc-analysis` | 46 başarılı, 0 başarısız |
-| `ai-scoring` | 102 başarılı, 0 başarısız |
-| `backend` (pytest) | 244 başarılı, 0 başarısız |
-| `frontend` (jest) | 178 başarılı, 0 başarısız |
+| `ai-scoring` | 106 başarılı, 0 başarısız |
+| `backend` (pytest) | 259 başarılı, 0 başarısız |
+| `frontend` (jest) | 195 başarılı, 0 başarısız |
 | `scripts/e2e-test.py` (canlı sunucu) | 76 başarılı, 0 başarısız |
 | `frontend` (next build) | başarılı |
 | Uçtan uca — API akışı | 40 başarılı, 0 başarısız |
